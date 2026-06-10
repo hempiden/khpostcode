@@ -103,6 +103,30 @@ interface ApiConfig {
   enableDropdownSearch?: boolean;
 }
 
+function sanitizeSupabaseUrl(url: string | undefined): string {
+  if (!url) return "";
+  let cleaned = url.trim();
+  if (cleaned && !cleaned.startsWith("http://") && !cleaned.startsWith("https://")) {
+    cleaned = "https://" + cleaned;
+  }
+  return cleaned.replace(/\/+$/, "");
+}
+
+function sanitizeSupabaseKey(key: string | undefined): string {
+  if (!key) return "";
+  let cleaned = key.trim();
+  cleaned = cleaned.replace(/^['"]|['"]$/g, "");
+  if (cleaned.toLowerCase().startsWith("bearer ")) {
+    cleaned = cleaned.substring(7).trim();
+  }
+  return cleaned;
+}
+
+function sanitizeSupabaseTable(table: string | undefined): string {
+  if (!table) return "cambodia_postcode_migration";
+  return table.trim().replace(/^['"]|['"]$/g, "");
+}
+
 function getApiConfig(): ApiConfig {
   let fileConfig: Partial<ApiConfig> = {};
   try {
@@ -121,9 +145,9 @@ function getApiConfig(): ApiConfig {
   const envGeminiKey = process.env.GEMINI_API_KEY || process.env.VITE_GEMINI_API_KEY || process.env.VITE_GEMINI_KEY;
 
   let config: ApiConfig = {
-    supabaseUrl: envSupabaseUrl || fileConfig.supabaseUrl || "",
-    supabaseKey: envSupabaseKey || fileConfig.supabaseKey || "",
-    supabaseTableName: envSupabaseTable || fileConfig.supabaseTableName || "cambodia_postcode_migration",
+    supabaseUrl: sanitizeSupabaseUrl(envSupabaseUrl || fileConfig.supabaseUrl || ""),
+    supabaseKey: sanitizeSupabaseKey(envSupabaseKey || fileConfig.supabaseKey || ""),
+    supabaseTableName: sanitizeSupabaseTable(envSupabaseTable || fileConfig.supabaseTableName || "cambodia_postcode_migration"),
     supabaseOverriddenFromEnv: !!(envSupabaseUrl && envSupabaseKey),
     geminiKey: fileConfig.geminiKey || envGeminiKey || "",
     geminiVersion: fileConfig.geminiVersion || "gemini-3.5-flash",
@@ -170,13 +194,13 @@ function writeApiConfig(newConfig: Partial<ApiConfig>): boolean {
     
     // Dynamically update server run-time settings so no hard restart is required
     if (updated.usePostgrestAlternative && updated.postgrestUrl) {
-      SUPABASE_URL = updated.postgrestUrl;
-      SUPABASE_KEY = updated.postgrestKey || "";
-      SUPABASE_TABLE_NAME = updated.postgrestTable || "cambodia_postcode_migration";
+      SUPABASE_URL = sanitizeSupabaseUrl(updated.postgrestUrl);
+      SUPABASE_KEY = sanitizeSupabaseKey(updated.postgrestKey || "");
+      SUPABASE_TABLE_NAME = sanitizeSupabaseTable(updated.postgrestTable || "cambodia_postcode_migration");
     } else {
-      SUPABASE_URL = updated.supabaseUrl;
-      SUPABASE_KEY = updated.supabaseKey;
-      SUPABASE_TABLE_NAME = updated.supabaseTableName || "cambodia_postcode_migration";
+      SUPABASE_URL = sanitizeSupabaseUrl(updated.supabaseUrl);
+      SUPABASE_KEY = sanitizeSupabaseKey(updated.supabaseKey);
+      SUPABASE_TABLE_NAME = sanitizeSupabaseTable(updated.supabaseTableName || "cambodia_postcode_migration");
     }
     
     if (updated.geminiKey) {
@@ -192,14 +216,14 @@ function writeApiConfig(newConfig: Partial<ApiConfig>): boolean {
 // Populate config on server boot
 const initialConfig = getApiConfig();
 let SUPABASE_URL = initialConfig.usePostgrestAlternative && initialConfig.postgrestUrl 
-  ? initialConfig.postgrestUrl 
-  : initialConfig.supabaseUrl;
+  ? sanitizeSupabaseUrl(initialConfig.postgrestUrl) 
+  : sanitizeSupabaseUrl(initialConfig.supabaseUrl);
 let SUPABASE_KEY = initialConfig.usePostgrestAlternative && initialConfig.postgrestUrl 
-  ? (initialConfig.postgrestKey || "") 
-  : initialConfig.supabaseKey;
+  ? sanitizeSupabaseKey(initialConfig.postgrestKey || "") 
+  : sanitizeSupabaseKey(initialConfig.supabaseKey);
 let SUPABASE_TABLE_NAME = (initialConfig.usePostgrestAlternative && initialConfig.postgrestUrl 
-  ? initialConfig.postgrestTable 
-  : initialConfig.supabaseTableName) || "cambodia_postcode_migration";
+  ? sanitizeSupabaseTable(initialConfig.postgrestTable) 
+  : sanitizeSupabaseTable(initialConfig.supabaseTableName)) || "cambodia_postcode_migration";
 
 if (initialConfig.geminiKey) {
   process.env.GEMINI_API_KEY = initialConfig.geminiKey;
