@@ -32,7 +32,7 @@ const dataFilePath = path.join(process.cwd(), "src", "data", "cambodia_postcodes
 const backupFilePath = path.join(process.cwd(), "src", "data", "cambodia_postcodes_backup.json");
 const configFilePath = path.join(process.cwd(), "src", "data", "api_config.json");
 
-// Establish original gold-standard baseline backup at first launch
+// Establish original gold-standard baseline backup at first launch.
 try {
   const dir = path.dirname(backupFilePath);
   if (!fs.existsSync(dir)) {

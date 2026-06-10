@@ -5553,7 +5553,7 @@ ON CONFLICT (email) DO NOTHING;`;
                   </div>
                 )}
  
-                {/* Username Input Field */}
+                {/* Username Input Field  */}
                 <div className="flex flex-col gap-1">
                   <label className="text-xs font-bold text-slate-500 uppercase tracking-wide">
                     Username / Registered Email
