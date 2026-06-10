@@ -111,8 +111,8 @@ function getApiConfig(): ApiConfig {
   // Precedence: Live environment variables (such as those auto-provisioned by Vercel integrations)
   // always take priority over saved state configuration values to avoid login & sync lockout issues.
   const envSupabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
-  const envSupabaseKey = process.env.SUPABASE_ANON_KEY || process.env.SUPABASE_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY;
-  const envSupabaseTable = process.env.SUPABASE_TABLE_NAME || process.env.VITE_SUPABASE_TABLE_NAME;
+  const envSupabaseKey = process.env.SUPABASE_ANON_KEY || process.env.SUPABASE_KEY || process.env.NEXT_PUBLIC_SUPABASE_KEY || process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY;
+  const envSupabaseTable = process.env.SUPABASE_TABLE_NAME || process.env.VITE_SUPABASE_TABLE_NAME || process.env.NEXT_PUBLIC_SUPABASE_TABLE_NAME;
   const envGeminiKey = process.env.GEMINI_API_KEY || process.env.VITE_GEMINI_API_KEY || process.env.VITE_GEMINI_KEY;
 
   let config: ApiConfig = {
