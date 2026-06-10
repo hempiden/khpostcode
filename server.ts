@@ -882,8 +882,8 @@ app.post("/api/postcodes/reset", async (req, res) => {
         inbound_fac: item.inbound_fac || ""
       }));
 
-      // Split into batches of 100 to prevent payload timeout warnings
-      const batchSize = 100;
+      // Split into batches of 15 to prevent payload size/timeout issues (fixes HTTP 413 Payload Too Large)
+      const batchSize = 15;
       console.log(`Pipelining insertion of ${supabasePayloads.length} entries to Supabase REST gateway in ${Math.ceil(supabasePayloads.length / batchSize)} batches...`);
       for (let i = 0; i < supabasePayloads.length; i += batchSize) {
         const batch = supabasePayloads.slice(i, i + batchSize);
@@ -957,8 +957,8 @@ app.post("/api/postcodes/sync-to-cloud", async (req, res) => {
       inbound_fac: item.inbound_fac || ""
     }));
 
-    // Chunk size 100 for safety
-    const batchSize = 100;
+    // Chunk size 15 for safety (fixes HTTP 413 Payload Too Large)
+    const batchSize = 15;
     for (let i = 0; i < payloads.length; i += batchSize) {
       const batch = payloads.slice(i, i + batchSize);
       const insertRes = await fetch(`${SUPABASE_URL}/rest/v1/${SUPABASE_TABLE_NAME}`, {
