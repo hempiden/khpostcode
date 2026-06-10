@@ -137,15 +137,22 @@ function getApiConfig(): ApiConfig {
   const envSupabaseTable = process.env.SUPABASE_TABLE_NAME || process.env.VITE_SUPABASE_TABLE_NAME || process.env.NEXT_PUBLIC_SUPABASE_TABLE_NAME;
   const envGeminiKey = process.env.GEMINI_API_KEY || process.env.VITE_GEMINI_API_KEY || process.env.VITE_GEMINI_KEY;
 
+  const resolveVal = (fileVal: string | undefined, envVal: string | undefined): string => {
+    if (fileVal !== undefined && fileVal.trim() !== "") {
+      return fileVal.trim();
+    }
+    return (envVal || "").trim();
+  };
+
   let config: ApiConfig = {
-    supabaseUrl: sanitizeSupabaseUrl(fileConfig.supabaseUrl !== undefined ? fileConfig.supabaseUrl : (envSupabaseUrl || "")),
-    supabaseKey: sanitizeSupabaseKey(fileConfig.supabaseKey !== undefined ? fileConfig.supabaseKey : (envSupabaseKey || "")),
-    supabaseTableName: sanitizeSupabaseTable(fileConfig.supabaseTableName !== undefined ? fileConfig.supabaseTableName : (envSupabaseTable || "cambodia_postcode_migration")),
-    supabaseOverriddenFromEnv: false,
-    geminiKey: fileConfig.geminiKey !== undefined ? fileConfig.geminiKey : (envGeminiKey || ""),
+    supabaseUrl: sanitizeSupabaseUrl(resolveVal(fileConfig.supabaseUrl, envSupabaseUrl)),
+    supabaseKey: sanitizeSupabaseKey(resolveVal(fileConfig.supabaseKey, envSupabaseKey)),
+    supabaseTableName: sanitizeSupabaseTable(resolveVal(fileConfig.supabaseTableName, envSupabaseTable)),
+    supabaseOverriddenFromEnv: !!((!fileConfig.supabaseUrl || fileConfig.supabaseUrl.trim() === "") && envSupabaseUrl),
+    geminiKey: resolveVal(fileConfig.geminiKey, envGeminiKey),
     geminiVersion: fileConfig.geminiVersion || "gemini-3.5-flash",
-    googleMapsKey: fileConfig.googleMapsKey !== undefined ? fileConfig.googleMapsKey : (process.env.VITE_GOOGLE_MAPS_KEY || ""),
-    googleMapsId: fileConfig.googleMapsId !== undefined ? fileConfig.googleMapsId : (process.env.VITE_GOOGLE_MAPS_ID || "DEMO_MAP_ID"),
+    googleMapsKey: resolveVal(fileConfig.googleMapsKey, process.env.VITE_GOOGLE_MAPS_KEY),
+    googleMapsId: resolveVal(fileConfig.googleMapsId, process.env.VITE_GOOGLE_MAPS_ID || "DEMO_MAP_ID"),
     siteTitle: fileConfig.siteTitle || "KH Postal Code",
     platformTitle: fileConfig.platformTitle || "Cambodia Postcode",
     heroBgImages: fileConfig.heroBgImages || [
