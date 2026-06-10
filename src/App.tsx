@@ -107,11 +107,40 @@ const PRESET_EXAMPLES = [
 const getEnvVal = (key: string): string => {
   try {
     const metaEnv = (import.meta as any).env;
-    if (metaEnv && metaEnv[key]) return metaEnv[key];
+    if (metaEnv) {
+      // Vite statically replaces these individual expressions at build time.
+      // Explicit properties are required for Vite to inline these properly in the client build.
+      if (key === "VITE_SITE_TITLE") return metaEnv.VITE_SITE_TITLE || "";
+      if (key === "VITE_PLATFORM_TITLE") return metaEnv.VITE_PLATFORM_TITLE || "";
+      if (key === "NEXT_PUBLIC_SUPABASE_URL") return metaEnv.NEXT_PUBLIC_SUPABASE_URL || "";
+      if (key === "VITE_SUPABASE_URL") return metaEnv.VITE_VITE_SUPABASE_URL || metaEnv.VITE_SUPABASE_URL || "";
+      if (key === "SUPABASE_URL") return metaEnv.SUPABASE_URL || "";
+      if (key === "SUPABASE_ANON_KEY") return metaEnv.SUPABASE_ANON_KEY || "";
+      if (key === "SUPABASE_KEY") return metaEnv.SUPABASE_KEY || "";
+      if (key === "SUPABASE_SERVICE_ROLE_KEY") return metaEnv.SUPABASE_SERVICE_ROLE_KEY || "";
+      if (key === "NEXT_PUBLIC_SUPABASE_ANON_KEY") return metaEnv.NEXT_PUBLIC_SUPABASE_ANON_KEY || "";
+      if (key === "VITE_SUPABASE_ANON_KEY") return metaEnv.VITE_SUPABASE_ANON_KEY || "";
+      if (key === "VITE_SUPABASE_KEY") return metaEnv.VITE_SUPABASE_KEY || "";
+      if (key === "SUPABASE_TABLE_NAME") return metaEnv.SUPABASE_TABLE_NAME || "";
+      if (key === "VITE_SUPABASE_TABLE_NAME") return metaEnv.VITE_SUPABASE_TABLE_NAME || "";
+      if (key === "GEMINI_API_KEY") return metaEnv.GEMINI_API_KEY || "";
+      if (key === "VITE_GEMINI_API_KEY") return metaEnv.VITE_GEMINI_API_KEY || "";
+      if (key === "VITE_GEMINI_KEY") return metaEnv.VITE_GEMINI_KEY || "";
+      if (key === "VITE_GEMINI_VERSION") return metaEnv.VITE_GEMINI_VERSION || "";
+      if (key === "VITE_DHL_CLIENT_ID") return metaEnv.VITE_DHL_CLIENT_ID || "";
+      if (key === "VITE_DHL_WEBHOOK") return metaEnv.VITE_DHL_WEBHOOK || "";
+      if (key === "VITE_SNOWFLAKE_ACCOUNT") return metaEnv.VITE_SNOWFLAKE_ACCOUNT || "";
+      if (key === "VITE_SNOWFLAKE_DATABASE") return metaEnv.VITE_SNOWFLAKE_DATABASE || "";
+      if (key === "VITE_GOOGLE_MAPS_KEY") return metaEnv.VITE_GOOGLE_MAPS_KEY || "";
+      if (key === "VITE_GOOGLE_MAPS_ID") return metaEnv.VITE_GOOGLE_MAPS_ID || "";
+      
+      // Fallback to dynamic lookup if available (e.g. during dev mode)
+      if (metaEnv[key]) return metaEnv[key];
+    }
   } catch (e) {}
   try {
     if (typeof process !== "undefined" && process.env && process.env[key]) {
-      return process.env[key];
+      return process.env[key] || "";
     }
   } catch (e) {}
   return "";
