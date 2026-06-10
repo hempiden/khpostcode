@@ -130,10 +130,6 @@ const getEnvVal = (key: string): string => {
       if (key === "VITE_GEMINI_API_KEY") return metaEnv.VITE_GEMINI_API_KEY || "";
       if (key === "VITE_GEMINI_KEY") return metaEnv.VITE_GEMINI_KEY || "";
       if (key === "VITE_GEMINI_VERSION") return metaEnv.VITE_GEMINI_VERSION || "";
-      if (key === "VITE_DHL_CLIENT_ID") return metaEnv.VITE_DHL_CLIENT_ID || "";
-      if (key === "VITE_DHL_WEBHOOK") return metaEnv.VITE_DHL_WEBHOOK || "";
-      if (key === "VITE_SNOWFLAKE_ACCOUNT") return metaEnv.VITE_SNOWFLAKE_ACCOUNT || "";
-      if (key === "VITE_SNOWFLAKE_DATABASE") return metaEnv.VITE_SNOWFLAKE_DATABASE || "";
       if (key === "VITE_GOOGLE_MAPS_KEY") return metaEnv.VITE_GOOGLE_MAPS_KEY || "";
       if (key === "VITE_GOOGLE_MAPS_ID") return metaEnv.VITE_GOOGLE_MAPS_ID || "";
       
@@ -798,7 +794,7 @@ export default function App() {
     }
   };
 
-  // Superadmin API Config States (DHL, Supabase, Gemini, Snowflake, Google Maps)
+  // Superadmin API Config States (Supabase, Gemini, Google Maps)
   const [apiConnections, setApiConnections] = useState(() => {
     let baseConfig = {
       siteTitle: "KH Postal Code",
@@ -813,23 +809,6 @@ export default function App() {
       geminiVersion: "gemini-3.5-flash",
       geminiTemp: 0.25,
       geminiStatus: "Inactive",
-
-      dhlClientId: "DHL-AI-PRO-KH",
-      dhlWebhook: "https://api.dhl.com.kh/v1/enrich",
-      dhlToken: "",
-      dhlEnrich: true,
-      dhlStatus: "Offline",
-
-      postgrestUrl: "https://gjodeadljbvtwjiagqqr.supabase.co",
-      postgrestKey: "",
-      postgrestTable: "cambodia_postcode_migration",
-      usePostgrestAlternative: false,
-
-      snowflakeAccount: "",
-      snowflakeDatabase: "",
-      snowflakeSize: "Medium",
-      snowflakeToken: "",
-      snowflakeStatus: "Offline",
 
       googleMapsKey: "",
       googleMapsId: "DEMO_MAP_ID",
@@ -1615,24 +1594,16 @@ ON CONFLICT (email) DO NOTHING;`;
         const data = await res.json();
         setApiConnections((prev: any) => ({
           ...prev,
-          siteTitle: data.siteTitle || prev.siteTitle || getRuntimeEnvValue(["VITE_SITE_TITLE"]) || "KH Postal Code",
-          platformTitle: data.platformTitle || prev.platformTitle || getRuntimeEnvValue(["VITE_PLATFORM_TITLE"]) || "Cambodia Postcode Migrator",
-          supabaseUrl: data.supabaseUrl || prev.supabaseUrl || getRuntimeEnvValue(["NEXT_PUBLIC_SUPABASE_URL", "VITE_SUPABASE_URL", "SUPABASE_URL"]),
-          supabaseKey: data.supabaseKey || prev.supabaseKey || getRuntimeEnvValue(["SUPABASE_ANON_KEY", "SUPABASE_KEY", "NEXT_PUBLIC_SUPABASE_KEY", "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY", "SUPABASE_SERVICE_ROLE_KEY", "NEXT_PUBLIC_SUPABASE_ANON_KEY", "VITE_SUPABASE_ANON_KEY", "VITE_SUPABASE_KEY"]),
-          supabaseTableName: data.supabaseTableName || prev.supabaseTableName || getRuntimeEnvValue(["SUPABASE_TABLE_NAME", "VITE_SUPABASE_TABLE_NAME", "NEXT_PUBLIC_SUPABASE_TABLE_NAME"]) || "cambodia_postcode_migration",
+          siteTitle: data.siteTitle !== undefined ? data.siteTitle : (prev.siteTitle || getRuntimeEnvValue(["VITE_SITE_TITLE"]) || "KH Postal Code"),
+          platformTitle: data.platformTitle !== undefined ? data.platformTitle : (prev.platformTitle || getRuntimeEnvValue(["VITE_PLATFORM_TITLE"]) || "Cambodia Postcode Migrator"),
+          supabaseUrl: data.supabaseUrl !== undefined ? data.supabaseUrl : (prev.supabaseUrl || getRuntimeEnvValue(["NEXT_PUBLIC_SUPABASE_URL", "VITE_SUPABASE_URL", "SUPABASE_URL"]) || ""),
+          supabaseKey: data.supabaseKey !== undefined ? data.supabaseKey : (prev.supabaseKey || getRuntimeEnvValue(["SUPABASE_ANON_KEY", "SUPABASE_KEY", "NEXT_PUBLIC_SUPABASE_KEY", "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY", "SUPABASE_SERVICE_ROLE_KEY", "NEXT_PUBLIC_SUPABASE_ANON_KEY", "VITE_SUPABASE_ANON_KEY", "VITE_SUPABASE_KEY"]) || ""),
+          supabaseTableName: data.supabaseTableName !== undefined ? data.supabaseTableName : (prev.supabaseTableName || getRuntimeEnvValue(["SUPABASE_TABLE_NAME", "VITE_SUPABASE_TABLE_NAME", "NEXT_PUBLIC_SUPABASE_TABLE_NAME"]) || "cambodia_postcode_migration"),
           supabaseOverriddenFromEnv: data.supabaseOverriddenFromEnv || false,
-          geminiKey: data.geminiKey || prev.geminiKey || getRuntimeEnvValue(["GEMINI_API_KEY", "VITE_GEMINI_API_KEY", "VITE_GEMINI_KEY"]),
-          geminiVersion: data.geminiVersion || prev.geminiVersion || getRuntimeEnvValue(["VITE_GEMINI_VERSION"]),
-          dhlClientId: data.dhlClientId || prev.dhlClientId || getRuntimeEnvValue(["VITE_DHL_CLIENT_ID"]),
-          dhlWebhook: data.dhlWebhook || prev.dhlWebhook || getRuntimeEnvValue(["VITE_DHL_WEBHOOK"]),
-          postgrestUrl: data.postgrestUrl !== undefined ? data.postgrestUrl : prev.postgrestUrl || "https://gjodeadljbvtwjiagqqr.supabase.co",
-          postgrestKey: data.postgrestKey !== undefined ? data.postgrestKey : prev.postgrestKey || "",
-          postgrestTable: data.postgrestTable !== undefined ? data.postgrestTable : prev.postgrestTable || "cambodia_postcode_migration",
-          usePostgrestAlternative: data.usePostgrestAlternative !== undefined ? data.usePostgrestAlternative : prev.usePostgrestAlternative || false,
-          snowflakeAccount: data.snowflakeAccount || prev.snowflakeAccount || getRuntimeEnvValue(["VITE_SNOWFLAKE_ACCOUNT"]),
-          snowflakeDatabase: data.snowflakeDatabase || prev.snowflakeDatabase || getRuntimeEnvValue(["VITE_SNOWFLAKE_DATABASE"]),
-          googleMapsKey: data.googleMapsKey || prev.googleMapsKey || getRuntimeEnvValue(["VITE_GOOGLE_MAPS_KEY"]),
-          googleMapsId: data.googleMapsId || prev.googleMapsId || getRuntimeEnvValue(["VITE_GOOGLE_MAPS_ID"]),
+          geminiKey: data.geminiKey !== undefined ? data.geminiKey : (prev.geminiKey || getRuntimeEnvValue(["GEMINI_API_KEY", "VITE_GEMINI_API_KEY", "VITE_GEMINI_KEY"]) || ""),
+          geminiVersion: data.geminiVersion !== undefined ? data.geminiVersion : (prev.geminiVersion || getRuntimeEnvValue(["VITE_GEMINI_VERSION"]) || "gemini-3.5-flash"),
+          googleMapsKey: data.googleMapsKey !== undefined ? data.googleMapsKey : (prev.googleMapsKey || getRuntimeEnvValue(["VITE_GOOGLE_MAPS_KEY"]) || ""),
+          googleMapsId: data.googleMapsId !== undefined ? data.googleMapsId : (prev.googleMapsId || getRuntimeEnvValue(["VITE_GOOGLE_MAPS_ID"]) || ""),
           websiteLogoType: data.websiteLogoType !== undefined ? data.websiteLogoType : prev.websiteLogoType || "preset",
           websiteLogoPreset: data.websiteLogoPreset !== undefined ? data.websiteLogoPreset : prev.websiteLogoPreset || "envelope",
           websiteLogoUrl: data.websiteLogoUrl !== undefined ? data.websiteLogoUrl : prev.websiteLogoUrl || "",
@@ -1664,14 +1635,6 @@ ON CONFLICT (email) DO NOTHING;`;
       supabaseTableName: getRuntimeEnvValue(["SUPABASE_TABLE_NAME", "VITE_SUPABASE_TABLE_NAME", "NEXT_PUBLIC_SUPABASE_TABLE_NAME"]) || prev.supabaseTableName || "cambodia_postcode_migration",
       geminiKey: getRuntimeEnvValue(["GEMINI_API_KEY", "VITE_GEMINI_API_KEY", "VITE_GEMINI_KEY"]) || prev.geminiKey,
       geminiVersion: getRuntimeEnvValue(["VITE_GEMINI_VERSION"]) || prev.geminiVersion || "gemini-3.5-flash",
-      dhlClientId: getRuntimeEnvValue(["VITE_DHL_CLIENT_ID"]) || prev.dhlClientId,
-      dhlWebhook: getRuntimeEnvValue(["VITE_DHL_WEBHOOK"]) || prev.dhlWebhook,
-      postgrestUrl: prev.postgrestUrl || "https://gjodeadljbvtwjiagqqr.supabase.co",
-      postgrestKey: prev.postgrestKey || "",
-      postgrestTable: prev.postgrestTable || "cambodia_postcode_migration",
-      usePostgrestAlternative: prev.usePostgrestAlternative || false,
-      snowflakeAccount: getRuntimeEnvValue(["VITE_SNOWFLAKE_ACCOUNT"]) || prev.snowflakeAccount,
-      snowflakeDatabase: getRuntimeEnvValue(["VITE_SNOWFLAKE_DATABASE"]) || prev.snowflakeDatabase,
       googleMapsKey: getRuntimeEnvValue(["VITE_GOOGLE_MAPS_KEY"]) || prev.googleMapsKey,
       googleMapsId: getRuntimeEnvValue(["VITE_GOOGLE_MAPS_ID"]) || prev.googleMapsId,
     }));
@@ -4240,24 +4203,14 @@ ON CONFLICT (email) DO NOTHING;`;
                               )}
                             </div>
                             <div className="flex flex-col gap-2.5">
-                              {apiConnections.supabaseOverriddenFromEnv && (
-                                <div className="text-[9px] text-emerald-400 bg-emerald-950/40 border border-emerald-900/40 p-2 rounded font-mono leading-relaxed">
-                                  🔒 Connected directly to your Vercel System Environment Variables. Interactive edits are bypassed for secure production delivery.
-                                </div>
-                              )}
                               <div className="flex flex-col gap-1">
                                 <label className="text-[9px] font-bold text-slate-450 uppercase font-mono">SUPABASE URL</label>
                                 <input
                                   type="text"
                                   value={apiConnections.supabaseUrl || ""}
-                                  disabled={!!apiConnections.supabaseOverriddenFromEnv}
                                   placeholder="e.g. https://your-project.supabase.co"
                                   onChange={(e) => setApiConnections(prev => ({ ...prev, supabaseUrl: e.target.value }))}
-                                  className={`w-full border text-slate-200 p-2 rounded text-xs outline-none font-mono ${
-                                    apiConnections.supabaseOverriddenFromEnv 
-                                      ? "bg-slate-950/60 border-slate-900/80 text-emerald-300 opacity-80 cursor-not-allowed" 
-                                      : "bg-slate-900 border-slate-800 focus:border-amber-400"
-                                  }`}
+                                  className="w-full bg-slate-900 border border-slate-800 text-slate-200 p-2 rounded text-xs outline-none focus:border-amber-400 font-mono"
                                 />
                               </div>
                               <div className="flex flex-col gap-1">
@@ -4265,14 +4218,9 @@ ON CONFLICT (email) DO NOTHING;`;
                                 <input
                                   type={showApiKeys ? "text" : "password"}
                                   value={apiConnections.supabaseKey || ""}
-                                  disabled={!!apiConnections.supabaseOverriddenFromEnv}
                                   placeholder="Type your Supabase JWT private secret key"
                                   onChange={(e) => setApiConnections(prev => ({ ...prev, supabaseKey: e.target.value }))}
-                                  className={`w-full border text-slate-200 p-2 rounded text-xs outline-none font-mono ${
-                                    apiConnections.supabaseOverriddenFromEnv 
-                                      ? "bg-slate-950/60 border-slate-900/80 text-emerald-300 opacity-80 cursor-not-allowed" 
-                                      : "bg-slate-900 border-slate-800 focus:border-amber-400"
-                                  }`}
+                                  className="w-full bg-slate-900 border border-slate-800 text-slate-200 p-2 rounded text-xs outline-none focus:border-amber-400 font-mono"
                                 />
                               </div>
                               <div className="flex flex-col gap-1">
@@ -4280,14 +4228,9 @@ ON CONFLICT (email) DO NOTHING;`;
                                 <input
                                   type="text"
                                   value={apiConnections.supabaseTableName || ""}
-                                  disabled={!!apiConnections.supabaseOverriddenFromEnv}
                                   placeholder="e.g. cambodia_postcode_migration"
                                   onChange={(e) => setApiConnections(prev => ({ ...prev, supabaseTableName: e.target.value }))}
-                                  className={`w-full border text-slate-200 p-2 rounded text-xs outline-none font-mono ${
-                                    apiConnections.supabaseOverriddenFromEnv 
-                                      ? "bg-slate-950/60 border-slate-900/80 text-emerald-300 opacity-80 cursor-not-allowed" 
-                                      : "bg-slate-900 border-slate-800 focus:border-amber-400"
-                                  }`}
+                                  className="w-full bg-slate-900 border border-slate-800 text-slate-200 p-2 rounded text-xs outline-none focus:border-amber-400 font-mono"
                                 />
                               </div>
                             </div>
@@ -4338,76 +4281,7 @@ ON CONFLICT (email) DO NOTHING;`;
                             </div>
                           </div>
 
-                          {/* 3. PostgREST alternative Database */}
-                          <div className="bg-slate-950/60 border border-slate-800 p-4 rounded-xl flex flex-col gap-3">
-                            <div className="flex items-center justify-between border-b border-slate-800 pb-2">
-                              <span className="text-[10px] font-bold text-slate-350 tracking-wider flex items-center gap-1.5">
-                                <Database className="w-3.5 h-3.5 text-amber-500" />
-                                POSTGREST DATABASE GATEWAY
-                              </span>
-                              <span className={`text-[9px] font-mono font-bold ${apiConnections.usePostgrestAlternative ? "text-emerald-400" : "text-amber-500"}`}>
-                                {apiConnections.usePostgrestAlternative ? "ALTERNATIVE ACTIVE" : "STANDBY"}
-                              </span>
-                            </div>
-                            <div className="flex flex-col gap-2.5">
-                              <div className="flex flex-col gap-1">
-                                <div className="flex items-center justify-between">
-                                  <label className="text-[9px] font-bold text-slate-450 uppercase font-mono">POSTGREST ENGINE URL</label>
-                                  <button
-                                    type="button"
-                                    onClick={() => setApiConnections(prev => ({ ...prev, postgrestUrl: "https://gjodeadljbvtwjiagqqr.supabase.co" }))}
-                                    className="text-[8.5px] text-amber-450 hover:underline font-bold"
-                                  >
-                                    ⚡ Set Default URL
-                                  </button>
-                                </div>
-                                <input
-                                  type="text"
-                                  value={apiConnections.postgrestUrl || ""}
-                                  placeholder="e.g. https://gjodeadljbvtwjiagqqr.supabase.co"
-                                  onChange={(e) => setApiConnections(prev => ({ ...prev, postgrestUrl: e.target.value }))}
-                                  className="w-full bg-slate-900 border border-slate-800 text-slate-200 p-2 rounded text-xs outline-none focus:border-amber-400 font-mono"
-                                />
-                              </div>
-                              <div className="flex flex-col gap-1">
-                                <label className="text-[9px] font-bold text-slate-450 uppercase font-mono">POSTGREST SECRET KEY / PRIVATE JWT</label>
-                                <input
-                                  type={showApiKeys ? "text" : "password"}
-                                  value={apiConnections.postgrestKey || ""}
-                                  placeholder="Type your PostgREST authorization JWT Token"
-                                  onChange={(e) => setApiConnections(prev => ({ ...prev, postgrestKey: e.target.value }))}
-                                  className="w-full bg-slate-900 border border-slate-800 text-slate-200 p-2 rounded text-xs outline-none focus:border-amber-400 font-mono"
-                                />
-                              </div>
-                              <div className="flex flex-col gap-1">
-                                <label className="text-[9px] font-bold text-slate-450 uppercase font-mono">POSTGREST TARGET TABLE</label>
-                                <input
-                                  type="text"
-                                  value={apiConnections.postgrestTable || ""}
-                                  placeholder="e.g. cambodia_postcode_migration"
-                                  onChange={(e) => setApiConnections(prev => ({ ...prev, postgrestTable: e.target.value }))}
-                                  className="w-full bg-slate-900 border border-slate-800 text-slate-200 p-2 rounded text-xs outline-none focus:border-amber-400 font-mono"
-                                />
-                              </div>
-                              <div className="flex items-center justify-between border-t border-slate-800/60 pt-2.5 mt-1">
-                                <div className="flex flex-col">
-                                  <span className="text-[9.5px] font-bold text-slate-300">Set as Active Database Connection?</span>
-                                  <span className="text-[8.5px] text-slate-450">Bypasses main Supabase URL for dynamic writes</span>
-                                </div>
-                                <label className="relative inline-flex items-center cursor-pointer">
-                                  <input 
-                                    type="checkbox" 
-                                    checked={!!apiConnections.usePostgrestAlternative}
-                                    onChange={(e) => setApiConnections(prev => ({ ...prev, usePostgrestAlternative: e.target.checked }))}
-                                    className="sr-only peer"
-                                  />
-                                  <div className="w-8 h-4 bg-slate-800 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[4px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-3 after:w-3 after:transition-all peer-checked:bg-amber-450"></div>
-                                </label>
-                              </div>
-                            </div>
-                          </div>
-
-                          {/* 4. Google Maps Platform UI Integrations */}
+                          {/* 3. Google Maps Platform UI Integrations */}
                           <div className="bg-slate-950/60 border border-slate-800 p-4 rounded-xl flex flex-col gap-3">
                             <div className="flex items-center justify-between border-b border-slate-800 pb-2">
                               <span className="text-[10px] font-bold text-slate-350 tracking-wider flex items-center gap-1.5">

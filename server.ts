@@ -79,14 +79,6 @@ interface ApiConfig {
   supabaseOverriddenFromEnv?: boolean;
   geminiKey: string;
   geminiVersion: string;
-  dhlClientId: string;
-  dhlWebhook: string;
-  postgrestUrl?: string;
-  postgrestKey?: string;
-  postgrestTable?: string;
-  usePostgrestAlternative?: boolean;
-  snowflakeAccount: string;
-  snowflakeDatabase: string;
   googleMapsKey: string;
   googleMapsId: string;
   siteTitle?: string;
@@ -137,30 +129,23 @@ function getApiConfig(): ApiConfig {
     console.error("Failed to read server api_config.json:", e);
   }
 
-  // Precedence: Live environment variables (such as those auto-provisioned by Vercel integrations)
-  // always take priority over saved state configuration values to avoid login & sync lockout issues.
+  // Precedence: User edits saved to the server configuration (src/data/api_config.json)
+  // always take priority over environment variables, allowing interactive edits to persist and override
+  // any system defaults.
   const envSupabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_SUPABASE_URL || process.env.NEXT_PUBLIC_NEXT_PUBLIC_SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
   const envSupabaseKey = process.env.NEXT_PUBLIC_SUPABASE_SUPABASE_SECRET_KEY || process.env.NEXT_PUBLIC_NEXT_PUBLIC_SUPABASE_SUPABASE_ANON_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY || process.env.SUPABASE_KEY || process.env.NEXT_PUBLIC_SUPABASE_KEY || process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY;
   const envSupabaseTable = process.env.SUPABASE_TABLE_NAME || process.env.VITE_SUPABASE_TABLE_NAME || process.env.NEXT_PUBLIC_SUPABASE_TABLE_NAME;
   const envGeminiKey = process.env.GEMINI_API_KEY || process.env.VITE_GEMINI_API_KEY || process.env.VITE_GEMINI_KEY;
 
   let config: ApiConfig = {
-    supabaseUrl: sanitizeSupabaseUrl(envSupabaseUrl || fileConfig.supabaseUrl || ""),
-    supabaseKey: sanitizeSupabaseKey(envSupabaseKey || fileConfig.supabaseKey || ""),
-    supabaseTableName: sanitizeSupabaseTable(envSupabaseTable || fileConfig.supabaseTableName || "cambodia_postcode_migration"),
-    supabaseOverriddenFromEnv: !!(envSupabaseUrl && envSupabaseKey),
-    geminiKey: fileConfig.geminiKey || envGeminiKey || "",
+    supabaseUrl: sanitizeSupabaseUrl(fileConfig.supabaseUrl !== undefined ? fileConfig.supabaseUrl : (envSupabaseUrl || "")),
+    supabaseKey: sanitizeSupabaseKey(fileConfig.supabaseKey !== undefined ? fileConfig.supabaseKey : (envSupabaseKey || "")),
+    supabaseTableName: sanitizeSupabaseTable(fileConfig.supabaseTableName !== undefined ? fileConfig.supabaseTableName : (envSupabaseTable || "cambodia_postcode_migration")),
+    supabaseOverriddenFromEnv: false,
+    geminiKey: fileConfig.geminiKey !== undefined ? fileConfig.geminiKey : (envGeminiKey || ""),
     geminiVersion: fileConfig.geminiVersion || "gemini-3.5-flash",
-    dhlClientId: fileConfig.dhlClientId || "DHL-AI-PRO-KH",
-    dhlWebhook: fileConfig.dhlWebhook || "https://api.dhl.com.kh/v1/enrich",
-    postgrestUrl: fileConfig.postgrestUrl || "https://gjodeadljbvtwjiagqqr.supabase.co",
-    postgrestKey: fileConfig.postgrestKey || "",
-    postgrestTable: fileConfig.postgrestTable || "cambodia_postcode_migration",
-    usePostgrestAlternative: fileConfig.usePostgrestAlternative !== undefined ? fileConfig.usePostgrestAlternative : false,
-    snowflakeAccount: fileConfig.snowflakeAccount || "",
-    snowflakeDatabase: fileConfig.snowflakeDatabase || "",
-    googleMapsKey: fileConfig.googleMapsKey || "",
-    googleMapsId: fileConfig.googleMapsId || "DEMO_MAP_ID",
+    googleMapsKey: fileConfig.googleMapsKey !== undefined ? fileConfig.googleMapsKey : (process.env.VITE_GOOGLE_MAPS_KEY || ""),
+    googleMapsId: fileConfig.googleMapsId !== undefined ? fileConfig.googleMapsId : (process.env.VITE_GOOGLE_MAPS_ID || "DEMO_MAP_ID"),
     siteTitle: fileConfig.siteTitle || "KH Postal Code",
     platformTitle: fileConfig.platformTitle || "Cambodia Postcode",
     heroBgImages: fileConfig.heroBgImages || [
@@ -193,15 +178,9 @@ function writeApiConfig(newConfig: Partial<ApiConfig>): boolean {
     fs.writeFileSync(configFilePath, JSON.stringify(updated, null, 2), "utf-8");
     
     // Dynamically update server run-time settings so no hard restart is required
-    if (updated.usePostgrestAlternative && updated.postgrestUrl) {
-      SUPABASE_URL = sanitizeSupabaseUrl(updated.postgrestUrl);
-      SUPABASE_KEY = sanitizeSupabaseKey(updated.postgrestKey || "");
-      SUPABASE_TABLE_NAME = sanitizeSupabaseTable(updated.postgrestTable || "cambodia_postcode_migration");
-    } else {
-      SUPABASE_URL = sanitizeSupabaseUrl(updated.supabaseUrl);
-      SUPABASE_KEY = sanitizeSupabaseKey(updated.supabaseKey);
-      SUPABASE_TABLE_NAME = sanitizeSupabaseTable(updated.supabaseTableName || "cambodia_postcode_migration");
-    }
+    SUPABASE_URL = sanitizeSupabaseUrl(updated.supabaseUrl);
+    SUPABASE_KEY = sanitizeSupabaseKey(updated.supabaseKey);
+    SUPABASE_TABLE_NAME = sanitizeSupabaseTable(updated.supabaseTableName || "cambodia_postcode_migration");
     
     if (updated.geminiKey) {
       process.env.GEMINI_API_KEY = updated.geminiKey;
@@ -215,15 +194,9 @@ function writeApiConfig(newConfig: Partial<ApiConfig>): boolean {
 
 // Populate config on server boot
 const initialConfig = getApiConfig();
-let SUPABASE_URL = initialConfig.usePostgrestAlternative && initialConfig.postgrestUrl 
-  ? sanitizeSupabaseUrl(initialConfig.postgrestUrl) 
-  : sanitizeSupabaseUrl(initialConfig.supabaseUrl);
-let SUPABASE_KEY = initialConfig.usePostgrestAlternative && initialConfig.postgrestUrl 
-  ? sanitizeSupabaseKey(initialConfig.postgrestKey || "") 
-  : sanitizeSupabaseKey(initialConfig.supabaseKey);
-let SUPABASE_TABLE_NAME = (initialConfig.usePostgrestAlternative && initialConfig.postgrestUrl 
-  ? sanitizeSupabaseTable(initialConfig.postgrestTable) 
-  : sanitizeSupabaseTable(initialConfig.supabaseTableName)) || "cambodia_postcode_migration";
+let SUPABASE_URL = sanitizeSupabaseUrl(initialConfig.supabaseUrl);
+let SUPABASE_KEY = sanitizeSupabaseKey(initialConfig.supabaseKey);
+let SUPABASE_TABLE_NAME = sanitizeSupabaseTable(initialConfig.supabaseTableName) || "cambodia_postcode_migration";
 
 if (initialConfig.geminiKey) {
   process.env.GEMINI_API_KEY = initialConfig.geminiKey;
@@ -894,7 +867,6 @@ app.post("/api/postcodes/reset", async (req, res) => {
         iso_country_code: "KH",
         postal_location_type: "CP",
         city_province: item.province,
-        province: item.province,
         new_country_division: item.province,
         district: item.district,
         commune: item.commune,
@@ -969,7 +941,6 @@ app.post("/api/postcodes/sync-to-cloud", async (req, res) => {
       iso_country_code: "KH",
       postal_location_type: "CP",
       city_province: item.province,
-      province: item.province,
       new_country_division: item.province,
       district: item.district,
       commune: item.commune,
