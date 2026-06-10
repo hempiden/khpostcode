@@ -80,6 +80,10 @@ interface ApiConfig {
   geminiVersion: string;
   dhlClientId: string;
   dhlWebhook: string;
+  postgrestUrl?: string;
+  postgrestKey?: string;
+  postgrestTable?: string;
+  usePostgrestAlternative?: boolean;
   snowflakeAccount: string;
   snowflakeDatabase: string;
   googleMapsKey: string;
@@ -123,6 +127,10 @@ function getApiConfig(): ApiConfig {
     geminiVersion: fileConfig.geminiVersion || "gemini-3.5-flash",
     dhlClientId: fileConfig.dhlClientId || "DHL-AI-PRO-KH",
     dhlWebhook: fileConfig.dhlWebhook || "https://api.dhl.com.kh/v1/enrich",
+    postgrestUrl: fileConfig.postgrestUrl || "https://gjodeadljbvtwjiagqqr.supabase.co",
+    postgrestKey: fileConfig.postgrestKey || "",
+    postgrestTable: fileConfig.postgrestTable || "cambodia_postcode_migration",
+    usePostgrestAlternative: fileConfig.usePostgrestAlternative !== undefined ? fileConfig.usePostgrestAlternative : false,
     snowflakeAccount: fileConfig.snowflakeAccount || "",
     snowflakeDatabase: fileConfig.snowflakeDatabase || "",
     googleMapsKey: fileConfig.googleMapsKey || "",
@@ -159,9 +167,16 @@ function writeApiConfig(newConfig: Partial<ApiConfig>): boolean {
     fs.writeFileSync(configFilePath, JSON.stringify(updated, null, 2), "utf-8");
     
     // Dynamically update server run-time settings so no hard restart is required
-    SUPABASE_URL = updated.supabaseUrl;
-    SUPABASE_KEY = updated.supabaseKey;
-    SUPABASE_TABLE_NAME = updated.supabaseTableName || "cambodia_postcode_migration";
+    if (updated.usePostgrestAlternative && updated.postgrestUrl) {
+      SUPABASE_URL = updated.postgrestUrl;
+      SUPABASE_KEY = updated.postgrestKey || "";
+      SUPABASE_TABLE_NAME = updated.postgrestTable || "cambodia_postcode_migration";
+    } else {
+      SUPABASE_URL = updated.supabaseUrl;
+      SUPABASE_KEY = updated.supabaseKey;
+      SUPABASE_TABLE_NAME = updated.supabaseTableName || "cambodia_postcode_migration";
+    }
+    
     if (updated.geminiKey) {
       process.env.GEMINI_API_KEY = updated.geminiKey;
     }
@@ -174,9 +189,16 @@ function writeApiConfig(newConfig: Partial<ApiConfig>): boolean {
 
 // Populate config on server boot
 const initialConfig = getApiConfig();
-let SUPABASE_URL = initialConfig.supabaseUrl;
-let SUPABASE_KEY = initialConfig.supabaseKey;
-let SUPABASE_TABLE_NAME = initialConfig.supabaseTableName || "cambodia_postcode_migration";
+let SUPABASE_URL = initialConfig.usePostgrestAlternative && initialConfig.postgrestUrl 
+  ? initialConfig.postgrestUrl 
+  : initialConfig.supabaseUrl;
+let SUPABASE_KEY = initialConfig.usePostgrestAlternative && initialConfig.postgrestUrl 
+  ? (initialConfig.postgrestKey || "") 
+  : initialConfig.supabaseKey;
+let SUPABASE_TABLE_NAME = (initialConfig.usePostgrestAlternative && initialConfig.postgrestUrl 
+  ? initialConfig.postgrestTable 
+  : initialConfig.supabaseTableName) || "cambodia_postcode_migration";
+
 if (initialConfig.geminiKey) {
   process.env.GEMINI_API_KEY = initialConfig.geminiKey;
 }

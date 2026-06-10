@@ -819,6 +819,11 @@ export default function App() {
       dhlEnrich: true,
       dhlStatus: "Offline",
 
+      postgrestUrl: "https://gjodeadljbvtwjiagqqr.supabase.co",
+      postgrestKey: "",
+      postgrestTable: "cambodia_postcode_migration",
+      usePostgrestAlternative: false,
+
       snowflakeAccount: "",
       snowflakeDatabase: "",
       snowflakeSize: "Medium",
@@ -1618,6 +1623,10 @@ ON CONFLICT (email) DO NOTHING;`;
           geminiVersion: data.geminiVersion || prev.geminiVersion || getRuntimeEnvValue(["VITE_GEMINI_VERSION"]),
           dhlClientId: data.dhlClientId || prev.dhlClientId || getRuntimeEnvValue(["VITE_DHL_CLIENT_ID"]),
           dhlWebhook: data.dhlWebhook || prev.dhlWebhook || getRuntimeEnvValue(["VITE_DHL_WEBHOOK"]),
+          postgrestUrl: data.postgrestUrl !== undefined ? data.postgrestUrl : prev.postgrestUrl || "https://gjodeadljbvtwjiagqqr.supabase.co",
+          postgrestKey: data.postgrestKey !== undefined ? data.postgrestKey : prev.postgrestKey || "",
+          postgrestTable: data.postgrestTable !== undefined ? data.postgrestTable : prev.postgrestTable || "cambodia_postcode_migration",
+          usePostgrestAlternative: data.usePostgrestAlternative !== undefined ? data.usePostgrestAlternative : prev.usePostgrestAlternative || false,
           snowflakeAccount: data.snowflakeAccount || prev.snowflakeAccount || getRuntimeEnvValue(["VITE_SNOWFLAKE_ACCOUNT"]),
           snowflakeDatabase: data.snowflakeDatabase || prev.snowflakeDatabase || getRuntimeEnvValue(["VITE_SNOWFLAKE_DATABASE"]),
           googleMapsKey: data.googleMapsKey || prev.googleMapsKey || getRuntimeEnvValue(["VITE_GOOGLE_MAPS_KEY"]),
@@ -1655,6 +1664,10 @@ ON CONFLICT (email) DO NOTHING;`;
       geminiVersion: getRuntimeEnvValue(["VITE_GEMINI_VERSION"]) || prev.geminiVersion || "gemini-3.5-flash",
       dhlClientId: getRuntimeEnvValue(["VITE_DHL_CLIENT_ID"]) || prev.dhlClientId,
       dhlWebhook: getRuntimeEnvValue(["VITE_DHL_WEBHOOK"]) || prev.dhlWebhook,
+      postgrestUrl: prev.postgrestUrl || "https://gjodeadljbvtwjiagqqr.supabase.co",
+      postgrestKey: prev.postgrestKey || "",
+      postgrestTable: prev.postgrestTable || "cambodia_postcode_migration",
+      usePostgrestAlternative: prev.usePostgrestAlternative || false,
       snowflakeAccount: getRuntimeEnvValue(["VITE_SNOWFLAKE_ACCOUNT"]) || prev.snowflakeAccount,
       snowflakeDatabase: getRuntimeEnvValue(["VITE_SNOWFLAKE_DATABASE"]) || prev.snowflakeDatabase,
       googleMapsKey: getRuntimeEnvValue(["VITE_GOOGLE_MAPS_KEY"]) || prev.googleMapsKey,
@@ -4303,35 +4316,71 @@ ON CONFLICT (email) DO NOTHING;`;
                             </div>
                           </div>
 
-                          {/* 3. DHL Courier Enrichment Custom Component */}
+                          {/* 3. PostgREST alternative Database */}
                           <div className="bg-slate-950/60 border border-slate-800 p-4 rounded-xl flex flex-col gap-3">
                             <div className="flex items-center justify-between border-b border-slate-800 pb-2">
                               <span className="text-[10px] font-bold text-slate-350 tracking-wider flex items-center gap-1.5">
-                                <span className="w-1.5 h-1.5 rounded-full bg-yellow-500"></span>
-                                DHL PARCEL ENRICHMENT
+                                <Database className="w-3.5 h-3.5 text-amber-500" />
+                                POSTGREST DATABASE GATEWAY
                               </span>
-                              <span className="text-[9px] text-amber-400 font-mono">ACTIVE</span>
+                              <span className={`text-[9px] font-mono font-bold ${apiConnections.usePostgrestAlternative ? "text-emerald-400" : "text-amber-500"}`}>
+                                {apiConnections.usePostgrestAlternative ? "ALTERNATIVE ACTIVE" : "STANDBY"}
+                              </span>
                             </div>
                             <div className="flex flex-col gap-2.5">
                               <div className="flex flex-col gap-1">
-                                <label className="text-[9px] font-bold text-slate-450 uppercase font-mono">DHL CLIENT ID</label>
+                                <div className="flex items-center justify-between">
+                                  <label className="text-[9px] font-bold text-slate-450 uppercase font-mono">POSTGREST ENGINE URL</label>
+                                  <button
+                                    type="button"
+                                    onClick={() => setApiConnections(prev => ({ ...prev, postgrestUrl: "https://gjodeadljbvtwjiagqqr.supabase.co" }))}
+                                    className="text-[8.5px] text-amber-450 hover:underline font-bold"
+                                  >
+                                    ⚡ Set Default URL
+                                  </button>
+                                </div>
                                 <input
                                   type="text"
-                                  value={apiConnections.dhlClientId || ""}
-                                  placeholder="e.g. DHL-AI-PRO-KH"
-                                  onChange={(e) => setApiConnections(prev => ({ ...prev, dhlClientId: e.target.value }))}
+                                  value={apiConnections.postgrestUrl || ""}
+                                  placeholder="e.g. https://gjodeadljbvtwjiagqqr.supabase.co"
+                                  onChange={(e) => setApiConnections(prev => ({ ...prev, postgrestUrl: e.target.value }))}
                                   className="w-full bg-slate-900 border border-slate-800 text-slate-200 p-2 rounded text-xs outline-none focus:border-amber-400 font-mono"
                                 />
                               </div>
                               <div className="flex flex-col gap-1">
-                                <label className="text-[9px] font-bold text-slate-450 uppercase font-mono">DHL WEBHOOK GATEWAY</label>
+                                <label className="text-[9px] font-bold text-slate-450 uppercase font-mono">POSTGREST SECRET KEY / PRIVATE JWT</label>
                                 <input
-                                  type="text"
-                                  value={apiConnections.dhlWebhook || ""}
-                                  placeholder="e.g. https://api.dhl.com.kh/v1/enrich"
-                                  onChange={(e) => setApiConnections(prev => ({ ...prev, dhlWebhook: e.target.value }))}
+                                  type={showApiKeys ? "text" : "password"}
+                                  value={apiConnections.postgrestKey || ""}
+                                  placeholder="Type your PostgREST authorization JWT Token"
+                                  onChange={(e) => setApiConnections(prev => ({ ...prev, postgrestKey: e.target.value }))}
                                   className="w-full bg-slate-900 border border-slate-800 text-slate-200 p-2 rounded text-xs outline-none focus:border-amber-400 font-mono"
                                 />
+                              </div>
+                              <div className="flex flex-col gap-1">
+                                <label className="text-[9px] font-bold text-slate-450 uppercase font-mono">POSTGREST TARGET TABLE</label>
+                                <input
+                                  type="text"
+                                  value={apiConnections.postgrestTable || ""}
+                                  placeholder="e.g. cambodia_postcode_migration"
+                                  onChange={(e) => setApiConnections(prev => ({ ...prev, postgrestTable: e.target.value }))}
+                                  className="w-full bg-slate-900 border border-slate-800 text-slate-200 p-2 rounded text-xs outline-none focus:border-amber-400 font-mono"
+                                />
+                              </div>
+                              <div className="flex items-center justify-between border-t border-slate-800/60 pt-2.5 mt-1">
+                                <div className="flex flex-col">
+                                  <span className="text-[9.5px] font-bold text-slate-300">Set as Active Database Connection?</span>
+                                  <span className="text-[8.5px] text-slate-450">Bypasses main Supabase URL for dynamic writes</span>
+                                </div>
+                                <label className="relative inline-flex items-center cursor-pointer">
+                                  <input 
+                                    type="checkbox" 
+                                    checked={!!apiConnections.usePostgrestAlternative}
+                                    onChange={(e) => setApiConnections(prev => ({ ...prev, usePostgrestAlternative: e.target.checked }))}
+                                    className="sr-only peer"
+                                  />
+                                  <div className="w-8 h-4 bg-slate-800 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[4px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-3 after:w-3 after:transition-all peer-checked:bg-amber-450"></div>
+                                </label>
                               </div>
                             </div>
                           </div>
