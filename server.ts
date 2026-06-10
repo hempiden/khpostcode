@@ -76,6 +76,7 @@ interface ApiConfig {
   supabaseUrl: string;
   supabaseKey: string;
   supabaseTableName?: string;
+  supabaseOverriddenFromEnv?: boolean;
   geminiKey: string;
   geminiVersion: string;
   dhlClientId: string;
@@ -114,15 +115,16 @@ function getApiConfig(): ApiConfig {
 
   // Precedence: Live environment variables (such as those auto-provisioned by Vercel integrations)
   // always take priority over saved state configuration values to avoid login & sync lockout issues.
-  const envSupabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
-  const envSupabaseKey = process.env.SUPABASE_ANON_KEY || process.env.SUPABASE_KEY || process.env.NEXT_PUBLIC_SUPABASE_KEY || process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY;
+  const envSupabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_SUPABASE_URL || process.env.NEXT_PUBLIC_NEXT_PUBLIC_SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
+  const envSupabaseKey = process.env.NEXT_PUBLIC_SUPABASE_SUPABASE_SECRET_KEY || process.env.NEXT_PUBLIC_NEXT_PUBLIC_SUPABASE_SUPABASE_ANON_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY || process.env.SUPABASE_KEY || process.env.NEXT_PUBLIC_SUPABASE_KEY || process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY;
   const envSupabaseTable = process.env.SUPABASE_TABLE_NAME || process.env.VITE_SUPABASE_TABLE_NAME || process.env.NEXT_PUBLIC_SUPABASE_TABLE_NAME;
   const envGeminiKey = process.env.GEMINI_API_KEY || process.env.VITE_GEMINI_API_KEY || process.env.VITE_GEMINI_KEY;
 
   let config: ApiConfig = {
-    supabaseUrl: fileConfig.supabaseUrl || envSupabaseUrl || "",
-    supabaseKey: fileConfig.supabaseKey || envSupabaseKey || "",
-    supabaseTableName: fileConfig.supabaseTableName || envSupabaseTable || "cambodia_postcode_migration",
+    supabaseUrl: envSupabaseUrl || fileConfig.supabaseUrl || "",
+    supabaseKey: envSupabaseKey || fileConfig.supabaseKey || "",
+    supabaseTableName: envSupabaseTable || fileConfig.supabaseTableName || "cambodia_postcode_migration",
+    supabaseOverriddenFromEnv: !!(envSupabaseUrl && envSupabaseKey),
     geminiKey: fileConfig.geminiKey || envGeminiKey || "",
     geminiVersion: fileConfig.geminiVersion || "gemini-3.5-flash",
     dhlClientId: fileConfig.dhlClientId || "DHL-AI-PRO-KH",

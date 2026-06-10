@@ -806,6 +806,7 @@ export default function App() {
       supabaseUrl: "",
       supabaseKey: "",
       supabaseTableName: "cambodia_postcode_migration",
+      supabaseOverriddenFromEnv: false,
       supabaseStatus: "Local Fallback Mode",
 
       geminiKey: "",
@@ -1619,6 +1620,7 @@ ON CONFLICT (email) DO NOTHING;`;
           supabaseUrl: data.supabaseUrl || prev.supabaseUrl || getRuntimeEnvValue(["NEXT_PUBLIC_SUPABASE_URL", "VITE_SUPABASE_URL", "SUPABASE_URL"]),
           supabaseKey: data.supabaseKey || prev.supabaseKey || getRuntimeEnvValue(["SUPABASE_ANON_KEY", "SUPABASE_KEY", "NEXT_PUBLIC_SUPABASE_KEY", "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY", "SUPABASE_SERVICE_ROLE_KEY", "NEXT_PUBLIC_SUPABASE_ANON_KEY", "VITE_SUPABASE_ANON_KEY", "VITE_SUPABASE_KEY"]),
           supabaseTableName: data.supabaseTableName || prev.supabaseTableName || getRuntimeEnvValue(["SUPABASE_TABLE_NAME", "VITE_SUPABASE_TABLE_NAME", "NEXT_PUBLIC_SUPABASE_TABLE_NAME"]) || "cambodia_postcode_migration",
+          supabaseOverriddenFromEnv: data.supabaseOverriddenFromEnv || false,
           geminiKey: data.geminiKey || prev.geminiKey || getRuntimeEnvValue(["GEMINI_API_KEY", "VITE_GEMINI_API_KEY", "VITE_GEMINI_KEY"]),
           geminiVersion: data.geminiVersion || prev.geminiVersion || getRuntimeEnvValue(["VITE_GEMINI_VERSION"]),
           dhlClientId: data.dhlClientId || prev.dhlClientId || getRuntimeEnvValue(["VITE_DHL_CLIENT_ID"]),
@@ -4238,14 +4240,24 @@ ON CONFLICT (email) DO NOTHING;`;
                               )}
                             </div>
                             <div className="flex flex-col gap-2.5">
+                              {apiConnections.supabaseOverriddenFromEnv && (
+                                <div className="text-[9px] text-emerald-400 bg-emerald-950/40 border border-emerald-900/40 p-2 rounded font-mono leading-relaxed">
+                                  🔒 Connected directly to your Vercel System Environment Variables. Interactive edits are bypassed for secure production delivery.
+                                </div>
+                              )}
                               <div className="flex flex-col gap-1">
                                 <label className="text-[9px] font-bold text-slate-450 uppercase font-mono">SUPABASE URL</label>
                                 <input
                                   type="text"
                                   value={apiConnections.supabaseUrl || ""}
+                                  disabled={!!apiConnections.supabaseOverriddenFromEnv}
                                   placeholder="e.g. https://your-project.supabase.co"
                                   onChange={(e) => setApiConnections(prev => ({ ...prev, supabaseUrl: e.target.value }))}
-                                  className="w-full bg-slate-900 border border-slate-800 text-slate-200 p-2 rounded text-xs outline-none focus:border-amber-400 font-mono"
+                                  className={`w-full border text-slate-200 p-2 rounded text-xs outline-none font-mono ${
+                                    apiConnections.supabaseOverriddenFromEnv 
+                                      ? "bg-slate-950/60 border-slate-900/80 text-emerald-300 opacity-80 cursor-not-allowed" 
+                                      : "bg-slate-900 border-slate-800 focus:border-amber-400"
+                                  }`}
                                 />
                               </div>
                               <div className="flex flex-col gap-1">
@@ -4253,9 +4265,14 @@ ON CONFLICT (email) DO NOTHING;`;
                                 <input
                                   type={showApiKeys ? "text" : "password"}
                                   value={apiConnections.supabaseKey || ""}
+                                  disabled={!!apiConnections.supabaseOverriddenFromEnv}
                                   placeholder="Type your Supabase JWT private secret key"
                                   onChange={(e) => setApiConnections(prev => ({ ...prev, supabaseKey: e.target.value }))}
-                                  className="w-full bg-slate-900 border border-slate-800 text-slate-200 p-2 rounded text-xs outline-none focus:border-amber-400 font-mono"
+                                  className={`w-full border text-slate-200 p-2 rounded text-xs outline-none font-mono ${
+                                    apiConnections.supabaseOverriddenFromEnv 
+                                      ? "bg-slate-950/60 border-slate-900/80 text-emerald-300 opacity-80 cursor-not-allowed" 
+                                      : "bg-slate-900 border-slate-800 focus:border-amber-400"
+                                  }`}
                                 />
                               </div>
                               <div className="flex flex-col gap-1">
@@ -4263,9 +4280,14 @@ ON CONFLICT (email) DO NOTHING;`;
                                 <input
                                   type="text"
                                   value={apiConnections.supabaseTableName || ""}
+                                  disabled={!!apiConnections.supabaseOverriddenFromEnv}
                                   placeholder="e.g. cambodia_postcode_migration"
                                   onChange={(e) => setApiConnections(prev => ({ ...prev, supabaseTableName: e.target.value }))}
-                                  className="w-full bg-slate-900 border border-slate-800 text-slate-200 p-2 rounded text-xs outline-none focus:border-amber-400 font-mono"
+                                  className={`w-full border text-slate-200 p-2 rounded text-xs outline-none font-mono ${
+                                    apiConnections.supabaseOverriddenFromEnv 
+                                      ? "bg-slate-950/60 border-slate-900/80 text-emerald-300 opacity-80 cursor-not-allowed" 
+                                      : "bg-slate-900 border-slate-800 focus:border-amber-400"
+                                  }`}
                                 />
                               </div>
                             </div>
