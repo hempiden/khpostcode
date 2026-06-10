@@ -1093,13 +1093,7 @@ function readAdminUsers(): AdminUser[] {
     console.error("Error reading admin users file:", err);
   }
   // Baseline initial users
-  const baseline = [
-    { id: "u1", name: "Sopheap K.", email: "sopheap@mptc.gov.kh", role: "Admin", approved: false },
-    { id: "u2", name: "Vireak O.", email: "vireak@logistics-kh.com", role: "Editor", approved: true },
-    { id: "u3", name: "Srey S.", email: "srey@dhl-cambodia.com", role: "Admin", approved: true },
-    { id: "u4", name: "Piseth M.", email: "piseth@mptc.gov.kh", role: "Editor", approved: false },
-    { id: "u5", name: "Rithy N.", email: "rithy@mptc.gov.kh", role: "Editor", approved: false }
-  ];
+  const baseline: AdminUser[] = [];
   return baseline;
 }
 
