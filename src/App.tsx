@@ -598,6 +598,7 @@ export default function App() {
   const [postcodes, setPostcodes] = useState<PostcodeEntry[]>([]);
   const [loadingDb, setLoadingDb] = useState(true);
   const [submitting, setSubmitting] = useState(false);
+  const [showApiKeys, setShowApiKeys] = useState(false);
 
   // References to keep state elements fresh inside Leaflet closures
   const latestPostcodesRef = useRef<PostcodeEntry[]>([]);
@@ -861,6 +862,11 @@ export default function App() {
     return baseConfig;
   });
 
+  const latestApiConnectionsRef = useRef(apiConnections);
+  useEffect(() => {
+    latestApiConnectionsRef.current = apiConnections;
+  }, [apiConnections]);
+
   // Custom setter that performs cleanups (like stopping camera feed)
   const setSubTool = (tool: "text" | "photo" | "map" | "dropdown") => {
     setSubToolState(tool);
@@ -988,7 +994,7 @@ ON CONFLICT (email) DO NOTHING;`;
   } | null>(null);
 
   // Geo Coordinate-to-Subdivision mapping definitions
-  const getCoordinatesForEntry = (province: string, district: string, commune: string) => {
+  const getCoordinatesForEntry = (province: string, district: string, commune: string, skipOffset = false) => {
     const p = province.toLowerCase();
     const d = district.toLowerCase();
     const c = commune.toLowerCase();
@@ -1044,15 +1050,19 @@ ON CONFLICT (email) DO NOTHING;`;
     }
     else if (p.includes("takeo")) base = [10.9935, 104.7812];
 
+    if (skipOffset) {
+      return base;
+    }
+
     // Build deterministic offset based on full name hash to visually disperse communes
-    // inside the parent region or district bounds (up to ~18km radius spread)
+    // inside the parent region or district bounds with premium compact spacing (~500m spread)
     let hash = 0;
     const fullStr = `${province} ${district} ${commune}`;
     for (let i = 0; i < fullStr.length; i++) {
       hash = fullStr.charCodeAt(i) + ((hash << 5) - hash);
     }
-    const latOffset = Math.sin(hash) * 0.085;
-    const lngOffset = Math.cos(hash + 1) * 0.085;
+    const latOffset = Math.sin(hash) * 0.004; // compact dispersion
+    const lngOffset = Math.cos(hash + 1) * 0.004;
 
     return [base[0] + latOffset, base[1] + lngOffset];
   };
@@ -1061,33 +1071,136 @@ ON CONFLICT (email) DO NOTHING;`;
   const resolveNearestPostcode = (lat: number, lng: number) => {
     const currentPostcodes = latestPostcodesRef.current;
     if (currentPostcodes.length === 0) return;
-    let nearest: PostcodeEntry | null = null;
-    let minDistance = Infinity;
 
-    currentPostcodes.forEach((entry) => {
-      const coords = getCoordinatesForEntry(entry.province, entry.district, entry.commune);
-      const dist = Math.pow(lat - coords[0], 2) + Math.pow(lng - coords[1], 2);
-      if (dist < minDistance) {
-        minDistance = dist;
-        nearest = entry;
+    const runResolve = async () => {
+      // Premium Dual-Layer Resolution:
+      // 1. If Google Maps Platform API is active, fetch high-fidelity reverse geocoding address
+      const googleKey = latestApiConnectionsRef.current.googleMapsKey;
+      if (googleKey && !googleKey.includes("••••") && googleKey.trim().length > 10) {
+        try {
+          const response = await fetch(`https://maps.googleapis.com/maps/api/geocode/json?latlng=${lat},${lng}&key=${googleKey}`);
+          if (response.ok) {
+            const geoData = await response.json();
+            if (geoData.status === "OK" && geoData.results && geoData.results[0]) {
+              const firstResult = geoData.results[0];
+              let gProvince = "";
+              let gDistrict = "";
+              let gCommune = "";
+
+              firstResult.address_components.forEach((comp: any) => {
+                const types = comp.types || [];
+                if (types.includes("administrative_area_level_1")) {
+                  gProvince = comp.long_name;
+                } else if (types.includes("administrative_area_level_2") || types.includes("locality")) {
+                  gDistrict = comp.long_name;
+                } else if (types.includes("sublocality_level_1") || types.includes("neighborhood") || types.includes("administrative_area_level_3")) {
+                  gCommune = comp.long_name;
+                }
+              });
+
+              // Clean & normalize matches helper
+              const normalizeStr = (str: string) => {
+                if (!str) return "";
+                return str
+                  .toLowerCase()
+                  .replace(/\b(province|capital|khan|sangkat|sangkat\b|krong|district|khan\b|municipality|phum|commune|capital city)\b/gi, "")
+                  .replace(/[‘’'"`]/g, "")
+                  .replace(/[^a-z0-9]/gi, "")
+                  .trim();
+              };
+
+              const findClosestLine = () => {
+                const normProv = normalizeStr(gProvince);
+                const normDist = normalizeStr(gDistrict);
+                const normComm = normalizeStr(gCommune);
+
+                if (!normProv) return null;
+
+                const provMatches = currentPostcodes.filter(e => {
+                  const eProv = normalizeStr(e.province);
+                  return eProv === normProv || eProv.includes(normProv) || normProv.includes(eProv);
+                });
+                if (provMatches.length === 0) return null;
+
+                let distMatches = provMatches;
+                if (normDist) {
+                  const directDist = provMatches.filter(e => {
+                    const eDist = normalizeStr(e.district);
+                    return eDist === normDist || eDist.includes(normDist) || normDist.includes(eDist);
+                  });
+                  if (directDist.length > 0) {
+                    distMatches = directDist;
+                  }
+                }
+
+                if (normComm) {
+                  const commMatches = distMatches.filter(e => {
+                    const eComm = normalizeStr(e.commune);
+                    return eComm === normComm || eComm.includes(normComm) || normComm.includes(eComm);
+                  });
+                  if (commMatches.length > 0) {
+                    return commMatches[0];
+                  }
+                }
+                return distMatches[0] || null;
+              };
+
+              const matchedLocal = findClosestLine();
+              if (matchedLocal) {
+                setSelectedNearestEntry(matchedLocal);
+                setSingleResult({
+                  province: matchedLocal.province,
+                  district: matchedLocal.district,
+                  commune: matchedLocal.commune,
+                  postcode_status: "Follow New Postcode",
+                  existing_postcode: matchedLocal.existing_postcode,
+                  new_postcode: matchedLocal.new_postcode,
+                  new_city_name: matchedLocal.new_city_name,
+                  ib_sort_co: matchedLocal.ib_sort_co || "",
+                  inbound_fac: matchedLocal.inbound_fac || "",
+                  input_text: `Google Geocoded Address: "${firstResult.formatted_address}"`
+                });
+                return;
+              }
+            }
+          }
+        } catch (err) {
+          console.warn("Google Maps reverse geocoding request failed. Falling back to local proximity calculations.", err);
+        }
       }
-    });
 
-    setSelectedNearestEntry(nearest);
-    if (nearest) {
-      setSingleResult({
-        province: nearest.province,
-        district: nearest.district,
-        commune: nearest.commune,
-        postcode_status: "Follow New Postcode",
-        existing_postcode: nearest.existing_postcode,
-        new_postcode: nearest.new_postcode,
-        new_city_name: nearest.new_city_name,
-        ib_sort_co: nearest.ib_sort_co || "",
-        inbound_fac: nearest.inbound_fac || "",
-        input_text: `Map point clicked: ${lat.toFixed(5)}, ${lng.toFixed(5)}`
+      // 2. High-Fidelity Local Proximity Match fallback (now with highly precise offset skips)
+      let nearest: PostcodeEntry | null = null;
+      let minDistance = Infinity;
+
+      currentPostcodes.forEach((entry) => {
+        // Use offset-skipped coordinates to match exact physical boundary centers
+        const coords = getCoordinatesForEntry(entry.province, entry.district, entry.commune, true);
+        const dist = Math.pow(lat - coords[0], 2) + Math.pow(lng - coords[1], 2);
+        if (dist < minDistance) {
+          minDistance = dist;
+          nearest = entry;
+        }
       });
-    }
+
+      setSelectedNearestEntry(nearest);
+      if (nearest) {
+        setSingleResult({
+          province: nearest.province,
+          district: nearest.district,
+          commune: nearest.commune,
+          postcode_status: "Follow New Postcode",
+          existing_postcode: nearest.existing_postcode,
+          new_postcode: nearest.new_postcode,
+          new_city_name: nearest.new_city_name,
+          ib_sort_co: nearest.ib_sort_co || "",
+          inbound_fac: nearest.inbound_fac || "",
+          input_text: `Geographic Coordinate Match: ${lat.toFixed(5)}, ${lng.toFixed(5)}`
+        });
+      }
+    };
+
+    runResolve();
   };
 
   resolveNearestPostcodeRef.current = resolveNearestPostcode;
@@ -1663,12 +1776,14 @@ ON CONFLICT (email) DO NOTHING;`;
     }
 
     // Handle marker dragging
-    marker.on("dragend", () => {
-      const position = marker.getLatLng();
-      map.panTo(position);
-      setMapCenter([position.lat, position.lng]);
+    marker.on("dragend", (e) => {
+      const position = e.target.getLatLng();
+      const lat = position.lat;
+      const lng = position.lng;
+      map.panTo([lat, lng]);
+      setMapCenter([lat, lng]);
       if (resolveNearestPostcodeRef.current) {
-        resolveNearestPostcodeRef.current(position.lat, position.lng);
+        resolveNearestPostcodeRef.current(lat, lng);
       }
     });
 
@@ -4067,50 +4182,89 @@ ON CONFLICT (email) DO NOTHING;`;
                         </div>
                       </div>
 
-                      {/* Unified Read-Only API Environment Status */}
-                      <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 flex flex-col gap-4 text-white">
-                        <div className="flex items-center justify-between border-b border-slate-800 pb-3">
-                          <span className="text-xs font-bold text-slate-100 flex items-center gap-2">
-                            <span className="w-5 h-5 bg-amber-400 text-slate-950 rounded flex items-center justify-center font-bold text-[10px]">ENV</span>
-                            Secure Host Environment Variables
-                          </span>
-                          <span className="bg-emerald-500/10 text-emerald-400 border border-emerald-500/25 px-2.5 py-0.5 rounded text-[9.5px] font-mono uppercase font-black tracking-wider flex items-center gap-1">
-                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
-                            Vercel Context Active
-                          </span>
+                      {/* Interactive API Gateway and Integration Editors */}
+                      <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 flex flex-col gap-5 text-white">
+                        <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-slate-800 pb-3 gap-2">
+                          <div className="flex items-center gap-2">
+                            <span className="w-5 h-5 bg-amber-400 text-slate-950 rounded flex items-center justify-center font-bold text-[10px]">API</span>
+                            <span className="text-xs font-bold text-slate-100">Editable API & Integration Credentials</span>
+                          </div>
+                          <div className="flex items-center gap-3">
+                            <button
+                              type="button"
+                              onClick={() => setShowApiKeys(!showApiKeys)}
+                              className="text-[10px] bg-slate-800 hover:bg-slate-700 text-slate-300 font-extrabold px-2.5 py-1 rounded transition-all cursor-pointer flex items-center gap-1 border border-slate-700"
+                            >
+                              {showApiKeys ? "🙈 Hide API Keys" : "👁️ Show API Keys"}
+                            </button>
+                            <span className="bg-amber-450/10 text-amber-400 border border-amber-500/25 px-2.5 py-0.5 rounded text-[9.5px] font-mono uppercase font-black tracking-wider flex items-center gap-1">
+                              <span className="w-1.5 h-1.5 rounded-full bg-amber-450 animate-pulse"></span>
+                              Editing Active
+                            </span>
+                          </div>
                         </div>
 
                         <div className="text-xs text-slate-400 leading-relaxed mb-1">
-                          To avoid configuration conflicts and sync collisions, all API and database variables on this server are locked read-only. Environment variables are loaded securely from your live <strong className="text-amber-400">Vercel Environment Settings</strong>.
+                          You can fully customize and override your integration credentials below. Click <strong className="text-amber-400">"Save Configuration Parameters"</strong> at the bottom of the page to commit changes securely.
                         </div>
 
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                          <div className="bg-slate-950/60 border border-slate-800 p-3 rounded-lg flex flex-col gap-2">
-                            <div className="flex items-center justify-between">
-                              <span className="text-[10px] font-bold text-slate-400 tracking-wider">DATABASE GATEWAY</span>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                          {/* 1. Supabase Gateway Component */}
+                          <div className="bg-slate-950/60 border border-slate-800 p-4 rounded-xl flex flex-col gap-3">
+                            <div className="flex items-center justify-between border-b border-slate-800 pb-2">
+                              <span className="text-[10px] font-bold text-slate-350 tracking-wider flex items-center gap-1.5">
+                                <span className="w-1.5 h-1.5 rounded-full bg-blue-500"></span>
+                                DATABASE GATEWAY (SUPABASE)
+                              </span>
                               {supabaseLiveStatus.loading ? (
                                 <span className="text-[9px] text-slate-400 font-mono">SCANNING...</span>
                               ) : supabaseLiveStatus.status === "connected" ? (
-                                <span className="text-[9px] text-emerald-400 font-mono font-bold">CONNECTED</span>
+                                <span className="text-[9px] text-emerald-400 font-mono font-bold">CONNECTED ({supabaseLiveStatus.count ?? 0} Rows)</span>
                               ) : (
                                 <span className="text-[9px] text-amber-500 font-mono font-bold">ERR/LOCAL</span>
                               )}
                             </div>
-                            <div className="flex flex-col gap-1 text-[10px] font-mono text-slate-300">
-                              <div>• URL: <span className="text-slate-400 break-all">{supabaseLiveStatus.url || apiConnections.supabaseUrl || "Auto-Loaded"}</span></div>
-                              <div>• TABLE: <span className="text-slate-400">{apiConnections.supabaseTableName || "cambodia_postcode_migration"}</span></div>
-                              <div>• SECRET KEY: <span className="text-slate-500">•••••••••••••••••••• (Injected)</span></div>
-                            </div>
-                            {supabaseLiveStatus.status === "connected" && supabaseLiveStatus.count !== undefined && (
-                              <div className="text-[10px] text-emerald-400 font-bold bg-emerald-500/5 px-2 py-1 rounded border border-emerald-500/10 mt-1 max-w-max">
-                                Database Rows: {supabaseLiveStatus.count}
+                            <div className="flex flex-col gap-2.5">
+                              <div className="flex flex-col gap-1">
+                                <label className="text-[9px] font-bold text-slate-450 uppercase font-mono">SUPABASE URL</label>
+                                <input
+                                  type="text"
+                                  value={apiConnections.supabaseUrl || ""}
+                                  placeholder="e.g. https://your-project.supabase.co"
+                                  onChange={(e) => setApiConnections(prev => ({ ...prev, supabaseUrl: e.target.value }))}
+                                  className="w-full bg-slate-900 border border-slate-800 text-slate-200 p-2 rounded text-xs outline-none focus:border-amber-400 font-mono"
+                                />
                               </div>
-                            )}
+                              <div className="flex flex-col gap-1">
+                                <label className="text-[9px] font-bold text-slate-450 uppercase font-mono">SUPABASE SERVICE ROLE / KEY</label>
+                                <input
+                                  type={showApiKeys ? "text" : "password"}
+                                  value={apiConnections.supabaseKey || ""}
+                                  placeholder="Type your Supabase JWT private secret key"
+                                  onChange={(e) => setApiConnections(prev => ({ ...prev, supabaseKey: e.target.value }))}
+                                  className="w-full bg-slate-900 border border-slate-800 text-slate-200 p-2 rounded text-xs outline-none focus:border-amber-400 font-mono"
+                                />
+                              </div>
+                              <div className="flex flex-col gap-1">
+                                <label className="text-[9px] font-bold text-slate-450 uppercase font-mono">SUPABASE TABLE NAME</label>
+                                <input
+                                  type="text"
+                                  value={apiConnections.supabaseTableName || ""}
+                                  placeholder="e.g. cambodia_postcode_migration"
+                                  onChange={(e) => setApiConnections(prev => ({ ...prev, supabaseTableName: e.target.value }))}
+                                  className="w-full bg-slate-900 border border-slate-800 text-slate-200 p-2 rounded text-xs outline-none focus:border-amber-400 font-mono"
+                                />
+                              </div>
+                            </div>
                           </div>
 
-                          <div className="bg-slate-950/60 border border-slate-800 p-3 rounded-lg flex flex-col gap-2">
-                            <div className="flex items-center justify-between">
-                              <span className="text-[10px] font-bold text-slate-400 tracking-wider">AI NEURAL MAPPER</span>
+                          {/* 2. Gemini AI Mapper Component */}
+                          <div className="bg-slate-950/60 border border-slate-800 p-4 rounded-xl flex flex-col gap-3">
+                            <div className="flex items-center justify-between border-b border-slate-800 pb-2">
+                              <span className="text-[10px] font-bold text-slate-350 tracking-wider flex items-center gap-1.5">
+                                <span className="w-1.5 h-1.5 rounded-full bg-purple-500"></span>
+                                AI NEURAL MAPPER (GEMINI)
+                              </span>
                               {geminiLiveStatus.loading ? (
                                 <span className="text-[9px] text-slate-400 font-mono">SCANNING...</span>
                               ) : geminiLiveStatus.status === "connected" ? (
@@ -4119,34 +4273,99 @@ ON CONFLICT (email) DO NOTHING;`;
                                 <span className="text-[9px] text-rose-400 font-mono font-bold">OFFLINE</span>
                               )}
                             </div>
-                            <div className="flex flex-col gap-1 text-[10px] font-mono text-slate-300">
-                              <div>• KEY: <span className="text-slate-500">•••••••••••••••••••• (Injected)</span></div>
-                              <div>• MODEL: <span className="text-slate-400">{apiConnections.geminiVersion || "gemini-3.5-flash"}</span></div>
-                            </div>
-                            <div className="text-[9.5px] text-slate-400 leading-snug mt-1">
-                              Performs high-intelligence parcel addresses, OCR scanning, and data normalization.
+                            <div className="flex flex-col gap-2.5">
+                              <div className="flex flex-col gap-1">
+                                <label className="text-[9px] font-bold text-slate-450 uppercase font-mono">GEMINI API KEY</label>
+                                <input
+                                  type={showApiKeys ? "text" : "password"}
+                                  value={apiConnections.geminiKey || ""}
+                                  placeholder="Type your Google Gemini API secret key"
+                                  onChange={(e) => setApiConnections(prev => ({ ...prev, geminiKey: e.target.value }))}
+                                  className="w-full bg-slate-900 border border-slate-800 text-slate-200 p-2 rounded text-xs outline-none focus:border-amber-400 font-mono"
+                                />
+                              </div>
+                              <div className="flex flex-col gap-1">
+                                <label className="text-[9px] font-bold text-slate-450 uppercase font-mono">GEMINI MODEL VERSION</label>
+                                <select
+                                  value={apiConnections.geminiVersion || "gemini-3.5-flash"}
+                                  onChange={(e) => setApiConnections(prev => ({ ...prev, geminiVersion: e.target.value }))}
+                                  className="w-full bg-slate-900 border border-slate-800 text-slate-200 p-2 rounded text-xs outline-none focus:border-amber-400 font-mono cursor-pointer"
+                                >
+                                  <option value="gemini-3.5-flash">gemini-3.5-flash (Default High-Speed)</option>
+                                  <option value="gemini-1.5-flash">gemini-1.5-flash (Standard OCR)</option>
+                                  <option value="gemini-1.5-pro">gemini-1.5-pro (High intelligence)</option>
+                                  <option value="gemini-2.1-pro">gemini-2.1-pro (Premium Ultra)</option>
+                                </select>
+                              </div>
+                              <div className="text-[9px] text-slate-450 leading-relaxed mt-1">
+                                Used for smart free-text normalization, bulk address analysis, and camera image OCR parsing.
+                              </div>
                             </div>
                           </div>
 
-                          <div className="bg-slate-950/60 border border-slate-800 p-3 rounded-lg flex flex-col gap-2">
-                            <span className="text-[10px] font-bold text-slate-400 tracking-wider uppercase justify-between flex items-center">
-                              <span>DHL PARCEL ENRICHMENT</span>
+                          {/* 3. DHL Courier Enrichment Custom Component */}
+                          <div className="bg-slate-950/60 border border-slate-800 p-4 rounded-xl flex flex-col gap-3">
+                            <div className="flex items-center justify-between border-b border-slate-800 pb-2">
+                              <span className="text-[10px] font-bold text-slate-350 tracking-wider flex items-center gap-1.5">
+                                <span className="w-1.5 h-1.5 rounded-full bg-yellow-500"></span>
+                                DHL PARCEL ENRICHMENT
+                              </span>
                               <span className="text-[9px] text-amber-400 font-mono">ACTIVE</span>
-                            </span>
-                            <div className="flex flex-col gap-1 text-[10px] font-mono text-slate-300">
-                              <div>• CLIENT ID: <span className="text-slate-400">{apiConnections.dhlClientId || "DHL-AI-PRO-KH"}</span></div>
-                              <div>• WEBHOOK: <span className="text-slate-400 break-all">{apiConnections.dhlWebhook || "https://api.dhl.com.kh/v1/enrich"}</span></div>
+                            </div>
+                            <div className="flex flex-col gap-2.5">
+                              <div className="flex flex-col gap-1">
+                                <label className="text-[9px] font-bold text-slate-450 uppercase font-mono">DHL CLIENT ID</label>
+                                <input
+                                  type="text"
+                                  value={apiConnections.dhlClientId || ""}
+                                  placeholder="e.g. DHL-AI-PRO-KH"
+                                  onChange={(e) => setApiConnections(prev => ({ ...prev, dhlClientId: e.target.value }))}
+                                  className="w-full bg-slate-900 border border-slate-800 text-slate-200 p-2 rounded text-xs outline-none focus:border-amber-400 font-mono"
+                                />
+                              </div>
+                              <div className="flex flex-col gap-1">
+                                <label className="text-[9px] font-bold text-slate-450 uppercase font-mono">DHL WEBHOOK GATEWAY</label>
+                                <input
+                                  type="text"
+                                  value={apiConnections.dhlWebhook || ""}
+                                  placeholder="e.g. https://api.dhl.com.kh/v1/enrich"
+                                  onChange={(e) => setApiConnections(prev => ({ ...prev, dhlWebhook: e.target.value }))}
+                                  className="w-full bg-slate-900 border border-slate-800 text-slate-200 p-2 rounded text-xs outline-none focus:border-amber-400 font-mono"
+                                />
+                              </div>
                             </div>
                           </div>
 
-                          <div className="bg-slate-950/60 border border-slate-800 p-3 rounded-lg flex flex-col gap-2">
-                            <span className="text-[10px] font-bold text-slate-400 tracking-wider uppercase justify-between flex items-center">
-                              <span>GOOGLE MAPS PLATFORM</span>
+                          {/* 4. Google Maps Platform UI Integrations */}
+                          <div className="bg-slate-950/60 border border-slate-800 p-4 rounded-xl flex flex-col gap-3">
+                            <div className="flex items-center justify-between border-b border-slate-800 pb-2">
+                              <span className="text-[10px] font-bold text-slate-350 tracking-wider flex items-center gap-1.5">
+                                <span className="w-1.5 h-1.5 rounded-full bg-red-500"></span>
+                                GOOGLE MAPS PLATFORM
+                              </span>
                               <span className="text-[9px] text-amber-400 font-mono">ACTIVE</span>
-                            </span>
-                            <div className="flex flex-col gap-1 text-[10px] font-mono text-slate-300">
-                              <div>• MAP ID: <span className="text-slate-400">{apiConnections.googleMapsId || "DEMO_MAP_ID"}</span></div>
-                              <div>• API KEY: <span className="text-slate-500">•••••••••••••••••••• (Injected)</span></div>
+                            </div>
+                            <div className="flex flex-col gap-2.5">
+                              <div className="flex flex-col gap-1">
+                                <label className="text-[9px] font-bold text-slate-450 uppercase font-mono">GOOGLE MAPS API KEY</label>
+                                <input
+                                  type={showApiKeys ? "text" : "password"}
+                                  value={apiConnections.googleMapsKey || ""}
+                                  placeholder="Type Google Maps API key (AI Reverse Geocoder)"
+                                  onChange={(e) => setApiConnections(prev => ({ ...prev, googleMapsKey: e.target.value }))}
+                                  className="w-full bg-slate-900 border border-slate-800 text-slate-200 p-2 rounded text-xs outline-none focus:border-amber-400 font-mono"
+                                />
+                              </div>
+                              <div className="flex flex-col gap-1">
+                                <label className="text-[9px] font-bold text-slate-450 uppercase font-mono">GOOGLE MAPS ID</label>
+                                <input
+                                  type="text"
+                                  value={apiConnections.googleMapsId || ""}
+                                  placeholder="e.g. DEMO_MAP_ID"
+                                  onChange={(e) => setApiConnections(prev => ({ ...prev, googleMapsId: e.target.value }))}
+                                  className="w-full bg-slate-900 border border-slate-800 text-slate-200 p-2 rounded text-xs outline-none focus:border-amber-400 font-mono"
+                                />
+                              </div>
                             </div>
                           </div>
                         </div>
