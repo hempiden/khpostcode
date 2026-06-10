@@ -205,11 +205,41 @@ let SUPABASE_URL = sanitizeSupabaseUrl(initialConfig.supabaseUrl);
 let SUPABASE_KEY = sanitizeSupabaseKey(initialConfig.supabaseKey);
 let SUPABASE_TABLE_NAME = sanitizeSupabaseTable(initialConfig.supabaseTableName) || "cambodia_postcode_migration";
 
+// Dynamic credentials resolver to override local file config with system env variables at runtime (highly-privileged bypass)
+function getSupabaseCredentials() {
+  const url = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.VITE_SUPABASE_URL || initialConfig.supabaseUrl || "";
+  const table = process.env.SUPABASE_TABLE_NAME || process.env.VITE_SUPABASE_TABLE_NAME || process.env.NEXT_PUBLIC_SUPABASE_TABLE_NAME || initialConfig.supabaseTableName || "cambodia_postcode_migration";
+  
+  // Prefer service_role or env key if available on server for full bypass of RLS policies
+  const secretKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_SUPABASE_SECRET_KEY;
+  if (secretKey && secretKey.trim() !== "") {
+    return { url: sanitizeSupabaseUrl(url), key: secretKey.trim(), table: sanitizeSupabaseTable(table) };
+  }
+  
+  const envKey = process.env.SUPABASE_KEY;
+  if (envKey && envKey.trim() !== "" && envKey !== "MY_SUPABASE_KEY") {
+    return { url: sanitizeSupabaseUrl(url), key: envKey.trim(), table: sanitizeSupabaseTable(table) };
+  }
+  
+  return { url: sanitizeSupabaseUrl(url), key: initialConfig.supabaseKey || "", table: sanitizeSupabaseTable(table) };
+}
+
+function syncActiveSupabaseVars() {
+  const creds = getSupabaseCredentials();
+  SUPABASE_URL = creds.url;
+  SUPABASE_KEY = creds.key;
+  SUPABASE_TABLE_NAME = creds.table;
+}
+
+// Perform initial sync at boot
+syncActiveSupabaseVars();
+
 if (initialConfig.geminiKey) {
   process.env.GEMINI_API_KEY = initialConfig.geminiKey;
 }
 
 const isSupabaseConfigured = (): boolean => {
+  syncActiveSupabaseVars();
   return !!(SUPABASE_URL && SUPABASE_KEY);
 };
 
