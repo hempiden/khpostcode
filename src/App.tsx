@@ -118,6 +118,7 @@ const getEnvVal = (key: string): string => {
       if (key === "SUPABASE_URL") return metaEnv.SUPABASE_URL || "";
       if (key === "SUPABASE_ANON_KEY") return metaEnv.SUPABASE_ANON_KEY || "";
       if (key === "SUPABASE_KEY") return metaEnv.SUPABASE_KEY || "";
+      if (key === "SUPABASE_SECRET_KEY") return metaEnv.SUPABASE_SECRET_KEY || "";
       if (key === "SUPABASE_SERVICE_ROLE_KEY") return metaEnv.SUPABASE_SERVICE_ROLE_KEY || "";
       if (key === "NEXT_PUBLIC_SUPABASE_ANON_KEY") return metaEnv.NEXT_PUBLIC_SUPABASE_ANON_KEY || "";
       if (key === "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY") return metaEnv.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY || "";
@@ -834,7 +835,7 @@ export default function App() {
     // Always prioritize live cloud runtime environment variables (like those from Vercel integrations)
     // over any default configurations or stale localStorage entries.
     const envSupabaseUrl = getRuntimeEnvValue(["NEXT_PUBLIC_SUPABASE_URL", "VITE_SUPABASE_URL", "SUPABASE_URL"]);
-    const envSupabaseKey = getRuntimeEnvValue(["SUPABASE_ANON_KEY", "SUPABASE_KEY", "NEXT_PUBLIC_SUPABASE_KEY", "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY", "SUPABASE_SERVICE_ROLE_KEY", "NEXT_PUBLIC_SUPABASE_ANON_KEY", "VITE_SUPABASE_ANON_KEY", "VITE_SUPABASE_KEY"]);
+    const envSupabaseKey = getRuntimeEnvValue(["SUPABASE_SECRET_KEY", "SUPABASE_ANON_KEY", "SUPABASE_KEY", "NEXT_PUBLIC_SUPABASE_KEY", "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY", "SUPABASE_SERVICE_ROLE_KEY", "NEXT_PUBLIC_SUPABASE_ANON_KEY", "VITE_SUPABASE_ANON_KEY", "VITE_SUPABASE_KEY"]);
     const envSupabaseTable = getRuntimeEnvValue(["SUPABASE_TABLE_NAME", "VITE_SUPABASE_TABLE_NAME", "NEXT_PUBLIC_SUPABASE_TABLE_NAME"]);
     const envGeminiKey = getRuntimeEnvValue(["GEMINI_API_KEY", "VITE_GEMINI_API_KEY", "VITE_GEMINI_KEY"]);
 
@@ -1647,7 +1648,7 @@ ON CONFLICT (email) DO NOTHING;`;
           siteTitle: data.siteTitle !== undefined ? data.siteTitle : (prev.siteTitle || getRuntimeEnvValue(["VITE_SITE_TITLE"]) || "KH Postal Code"),
           platformTitle: data.platformTitle !== undefined ? data.platformTitle : (prev.platformTitle || getRuntimeEnvValue(["VITE_PLATFORM_TITLE"]) || "Cambodia Postcode Migrator"),
           supabaseUrl: data.supabaseUrl !== undefined ? data.supabaseUrl : (prev.supabaseUrl || getRuntimeEnvValue(["NEXT_PUBLIC_SUPABASE_URL", "VITE_SUPABASE_URL", "SUPABASE_URL"]) || ""),
-          supabaseKey: data.supabaseKey !== undefined ? data.supabaseKey : (prev.supabaseKey || getRuntimeEnvValue(["SUPABASE_ANON_KEY", "SUPABASE_KEY", "NEXT_PUBLIC_SUPABASE_KEY", "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY", "SUPABASE_SERVICE_ROLE_KEY", "NEXT_PUBLIC_SUPABASE_ANON_KEY", "VITE_SUPABASE_ANON_KEY", "VITE_SUPABASE_KEY"]) || ""),
+          supabaseKey: data.supabaseKey !== undefined ? data.supabaseKey : (prev.supabaseKey || getRuntimeEnvValue(["SUPABASE_SECRET_KEY", "SUPABASE_ANON_KEY", "SUPABASE_KEY", "NEXT_PUBLIC_SUPABASE_KEY", "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY", "SUPABASE_SERVICE_ROLE_KEY", "NEXT_PUBLIC_SUPABASE_ANON_KEY", "VITE_SUPABASE_ANON_KEY", "VITE_SUPABASE_KEY"]) || ""),
           supabaseTableName: data.supabaseTableName !== undefined ? data.supabaseTableName : (prev.supabaseTableName || getRuntimeEnvValue(["SUPABASE_TABLE_NAME", "VITE_SUPABASE_TABLE_NAME", "NEXT_PUBLIC_SUPABASE_TABLE_NAME"]) || "cambodia_postcode_migration"),
           supabaseOverriddenFromEnv: data.supabaseOverriddenFromEnv || false,
           geminiKey: data.geminiKey !== undefined ? data.geminiKey : (prev.geminiKey || getRuntimeEnvValue(["GEMINI_API_KEY", "VITE_GEMINI_API_KEY", "VITE_GEMINI_KEY"]) || ""),
@@ -1681,7 +1682,7 @@ ON CONFLICT (email) DO NOTHING;`;
       siteTitle: getRuntimeEnvValue(["VITE_SITE_TITLE"]) || prev.siteTitle || "KH Postal Code",
       platformTitle: getRuntimeEnvValue(["VITE_PLATFORM_TITLE"]) || prev.platformTitle || "Cambodia Postcode Migrator",
       supabaseUrl: getRuntimeEnvValue(["NEXT_PUBLIC_SUPABASE_URL", "VITE_SUPABASE_URL", "SUPABASE_URL"]) || prev.supabaseUrl,
-      supabaseKey: getRuntimeEnvValue(["SUPABASE_ANON_KEY", "SUPABASE_KEY", "NEXT_PUBLIC_SUPABASE_KEY", "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY", "SUPABASE_SERVICE_ROLE_KEY", "NEXT_PUBLIC_SUPABASE_ANON_KEY", "VITE_SUPABASE_ANON_KEY", "VITE_SUPABASE_KEY"]) || prev.supabaseKey,
+      supabaseKey: getRuntimeEnvValue(["SUPABASE_SECRET_KEY", "SUPABASE_ANON_KEY", "SUPABASE_KEY", "NEXT_PUBLIC_SUPABASE_KEY", "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY", "SUPABASE_SERVICE_ROLE_KEY", "NEXT_PUBLIC_SUPABASE_ANON_KEY", "VITE_SUPABASE_ANON_KEY", "VITE_SUPABASE_KEY"]) || prev.supabaseKey,
       supabaseTableName: getRuntimeEnvValue(["SUPABASE_TABLE_NAME", "VITE_SUPABASE_TABLE_NAME", "NEXT_PUBLIC_SUPABASE_TABLE_NAME"]) || prev.supabaseTableName || "cambodia_postcode_migration",
       geminiKey: getRuntimeEnvValue(["GEMINI_API_KEY", "VITE_GEMINI_API_KEY", "VITE_GEMINI_KEY"]) || prev.geminiKey,
       geminiVersion: getRuntimeEnvValue(["VITE_GEMINI_VERSION"]) || prev.geminiVersion || "gemini-3.5-flash",

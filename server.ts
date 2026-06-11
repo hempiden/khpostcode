@@ -129,7 +129,7 @@ async function fetchFromSupabaseSettings(key: string): Promise<any | null> {
   const activeUrl = url ? sanitizeSupabaseUrl(url) : sanitizeSupabaseUrl(initialConfigTemp.supabaseUrl);
   
   // Try using env service_role first or env key, fallback to local/decrypted configuration
-  const secretKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_SUPABASE_SECRET_KEY || process.env.SUPABASE_KEY || (cachedDbConfig && cachedDbConfig.supabaseKey) || initialConfigTemp.supabaseKey || "";
+  const secretKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SECRET_KEY || process.env.NEXT_PUBLIC_SUPABASE_SUPABASE_SECRET_KEY || process.env.SUPABASE_KEY || process.env.SUPABASE_ANON_KEY || (cachedDbConfig && cachedDbConfig.supabaseKey) || initialConfigTemp.supabaseKey || "";
   const activeKey = sanitizeSupabaseKey(secretKey);
 
   if (!activeUrl || !activeKey) return null;
@@ -158,7 +158,7 @@ async function saveToSupabaseSettings(key: string, value: any): Promise<boolean>
   const initialConfigTemp = getApiConfigOnlyFile();
   const activeUrl = url ? sanitizeSupabaseUrl(url) : sanitizeSupabaseUrl(initialConfigTemp.supabaseUrl);
   
-  const secretKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_SUPABASE_SECRET_KEY || process.env.SUPABASE_KEY || (cachedDbConfig && cachedDbConfig.supabaseKey) || initialConfigTemp.supabaseKey || "";
+  const secretKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SECRET_KEY || process.env.NEXT_PUBLIC_SUPABASE_SUPABASE_SECRET_KEY || process.env.SUPABASE_KEY || process.env.SUPABASE_ANON_KEY || (cachedDbConfig && cachedDbConfig.supabaseKey) || initialConfigTemp.supabaseKey || "";
   const activeKey = sanitizeSupabaseKey(secretKey);
 
   if (!activeUrl || !activeKey) return false;
@@ -227,7 +227,7 @@ function getApiConfig(): ApiConfig {
   // always take priority over environment variables, allowing interactive edits to persist and override
   // any system defaults.
   const envSupabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_SUPABASE_URL || process.env.NEXT_PUBLIC_NEXT_PUBLIC_SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
-  const envSupabaseKey = process.env.NEXT_PUBLIC_SUPABASE_SUPABASE_SECRET_KEY || process.env.NEXT_PUBLIC_NEXT_PUBLIC_SUPABASE_SUPABASE_ANON_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY || process.env.SUPABASE_KEY || process.env.NEXT_PUBLIC_SUPABASE_KEY || process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY;
+  const envSupabaseKey = process.env.SUPABASE_SECRET_KEY || process.env.NEXT_PUBLIC_SUPABASE_SUPABASE_SECRET_KEY || process.env.NEXT_PUBLIC_NEXT_PUBLIC_SUPABASE_SUPABASE_ANON_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY || process.env.SUPABASE_KEY || process.env.NEXT_PUBLIC_SUPABASE_KEY || process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY;
   const envSupabaseTable = process.env.SUPABASE_TABLE_NAME || process.env.VITE_SUPABASE_TABLE_NAME || process.env.NEXT_PUBLIC_SUPABASE_TABLE_NAME;
   const envGeminiKey = process.env.GEMINI_API_KEY || process.env.VITE_GEMINI_API_KEY || process.env.VITE_GEMINI_KEY;
 
@@ -331,12 +331,12 @@ function getSupabaseCredentials() {
   const table = process.env.SUPABASE_TABLE_NAME || process.env.VITE_SUPABASE_TABLE_NAME || process.env.NEXT_PUBLIC_SUPABASE_TABLE_NAME || initialConfig.supabaseTableName || "cambodia_postcode_migration";
   
   // Prefer service_role or env key if available on server for full bypass of RLS policies
-  const secretKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_SUPABASE_SECRET_KEY;
+  const secretKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SECRET_KEY || process.env.NEXT_PUBLIC_SUPABASE_SUPABASE_SECRET_KEY;
   if (secretKey && secretKey.trim() !== "") {
     return { url: sanitizeSupabaseUrl(url), key: secretKey.trim(), table: sanitizeSupabaseTable(table) };
   }
   
-  const envKey = process.env.SUPABASE_KEY;
+  const envKey = process.env.SUPABASE_KEY || process.env.SUPABASE_ANON_KEY;
   if (envKey && envKey.trim() !== "" && envKey !== "MY_SUPABASE_KEY") {
     return { url: sanitizeSupabaseUrl(url), key: envKey.trim(), table: sanitizeSupabaseTable(table) };
   }
