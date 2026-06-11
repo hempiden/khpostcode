@@ -22,6 +22,7 @@ import {
   RefreshCw,
   HelpCircle,
   Camera,
+  Settings,
   Image,
   Map,
   Navigation,
@@ -770,6 +771,10 @@ export default function App() {
   // Advanced Superadmin confirmation triggers (Replaces native browser blocking alerts)
   const [resetConfirmActive, setResetConfirmActive] = useState(false);
   const [syncConfirmActive, setSyncConfirmActive] = useState(false);
+  const [supabaseRlsError, setSupabaseRlsError] = useState<any>(null);
+  const [rolesSaving, setRolesSaving] = useState(false);
+  const [roleFeaturesSource, setRoleFeaturesSource] = useState<"database" | "fallback">("fallback");
+  const [showDbInfoPanel, setShowDbInfoPanel] = useState(false);
   const [configSaving, setConfigSaving] = useState(false);
   const [configSavedToast, setConfigSavedToast] = useState(false);
 
@@ -1581,6 +1586,57 @@ ON CONFLICT (email) DO NOTHING;`;
     }
   };
 
+  const fetchRoleFeatures = async () => {
+    try {
+      const res = await fetch("/api/get-role-features");
+      if (res.ok) {
+        const data = await res.json();
+        if (data && data.roleFeatures && Array.isArray(data.roleFeatures)) {
+          setRoleFeaturesList(data.roleFeatures);
+          setRoleFeaturesSource(data.source || "database");
+        } else {
+          setRoleFeaturesSource("fallback");
+        }
+      }
+    } catch (e) {
+      console.error("Failed to load server dynamic roles:", e);
+      setRoleFeaturesSource("fallback");
+    }
+  };
+
+  const handleSaveRoleFeatures = async () => {
+    setRolesSaving(true);
+    try {
+      const res = await fetch("/api/save-role-features", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ roleFeatures: roleFeaturesList }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.warning === "db_not_present") {
+          setRoleFeaturesSource("fallback");
+          setShowDbInfoPanel(true);
+          setSuccessMessage("Roles saved to local cache buffer. Create platform_settings table to persist permanently!");
+          setTimeout(() => setSuccessMessage(null), 8500);
+        } else {
+          setRoleFeaturesSource("database");
+          setSuccessMessage("Successfully applied and persisted all custom roles to database!");
+          setTimeout(() => setSuccessMessage(null), 5000);
+        }
+      } else {
+        const errDetail = await res.json().catch(() => ({}));
+        setErrorMessage(errDetail.error || "Failed storing role features.");
+        setTimeout(() => setErrorMessage(null), 5000);
+      }
+    } catch (err) {
+      setErrorMessage("Network transport error syncing configurations with the live server gateway.");
+      setTimeout(() => setErrorMessage(null), 5000);
+    } finally {
+      setRolesSaving(false);
+    }
+  };
+
   const fetchApiConfig = async () => {
     try {
       const res = await fetch("/api/get-config");
@@ -1650,6 +1706,7 @@ ON CONFLICT (email) DO NOTHING;`;
     fetchPostcodes();
     fetchAdminUsers();
     fetchApiConfig();
+    fetchRoleFeatures();
     checkLiveApis();
   }, []);
 
@@ -2097,6 +2154,7 @@ ON CONFLICT (email) DO NOTHING;`;
   const handleResetDatabase = async () => {
     try {
       setSuccessMessage("Sending baseline restore command to database server...");
+      setSupabaseRlsError(null);
       const res = await fetch("/api/postcodes/reset", { method: "POST" });
       if (res.ok) {
         setSuccessMessage("Postcode directory successfully restored to 1653 official Cambodian baseline records.");
@@ -2106,7 +2164,16 @@ ON CONFLICT (email) DO NOTHING;`;
       } else {
         const errDetail = await res.json().catch(() => ({}));
         setErrorMessage(errDetail.error || "Failed resetting base records.");
-        setTimeout(() => setErrorMessage(null), 5000);
+        if (errDetail.details && (errDetail.details.includes("42501") || errDetail.details.includes("row-level security policy") || errDetail.details.includes("security policy"))) {
+          let parsed = null;
+          try {
+            parsed = typeof errDetail.details === "string" ? JSON.parse(errDetail.details) : errDetail.details;
+          } catch (e) {
+            parsed = { message: errDetail.details };
+          }
+          setSupabaseRlsError(parsed || { message: "Row-Level Security violation (42501)" });
+        }
+        setTimeout(() => setErrorMessage(null), 8500);
       }
     } catch (err) {
       setErrorMessage("Failed resetting baseline database due to network transport issues.");
@@ -2117,6 +2184,7 @@ ON CONFLICT (email) DO NOTHING;`;
   const handleSyncToCloud = async () => {
     try {
       setSuccessMessage("Synchronizing current local directory cache to cloud Supabase tables...");
+      setSupabaseRlsError(null);
       const res = await fetch("/api/postcodes/sync-to-cloud", { method: "POST" });
       if (res.ok) {
         const result = await res.json();
@@ -2127,7 +2195,16 @@ ON CONFLICT (email) DO NOTHING;`;
       } else {
         const errDetail = await res.json().catch(() => ({}));
         setErrorMessage(errDetail.error || "Failed pushing local records to Supabase.");
-        setTimeout(() => setErrorMessage(null), 5000);
+        if (errDetail.details && (errDetail.details.includes("42501") || errDetail.details.includes("row-level security policy") || errDetail.details.includes("security policy"))) {
+          let parsed = null;
+          try {
+            parsed = typeof errDetail.details === "string" ? JSON.parse(errDetail.details) : errDetail.details;
+          } catch (e) {
+            parsed = { message: errDetail.details };
+          }
+          setSupabaseRlsError(parsed || { message: "Row-Level Security violation (42501)" });
+        }
+        setTimeout(() => setErrorMessage(null), 8500);
       }
     } catch (err) {
       setErrorMessage("Could not connect to synchronization gateway API router.");
@@ -4599,6 +4676,61 @@ ON CONFLICT (email) DO NOTHING;`;
                       </div>
                     </div>
                   </div>
+
+                  {supabaseRlsError && (
+                    <div className="border border-rose-200 bg-rose-50/70 rounded-lg p-4 mt-4 animate-fadeIn flex flex-col gap-3">
+                      <div className="flex items-start gap-2.5">
+                        <div className="bg-rose-100 p-1.5 rounded text-rose-600 mt-0.5 shrink-0">
+                          <ShieldAlert className="w-4 h-4 text-rose-650" />
+                        </div>
+                        <div>
+                          <h6 className="font-extrabold text-[12px] text-rose-950 flex items-center gap-1.5 uppercase font-mono">
+                            Supabase Row-Level Security (RLS) Restriction
+                          </h6>
+                          <p className="text-slate-600 text-[10.5px] mt-1 leading-normal">
+                            Your database transaction rejected direct insertion because Row-Level Security is active in Supabase.
+                            By default, the <strong>public/anon</strong> API key lacks write access on the table.
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="bg-white border border-rose-150 rounded-lg p-3.5 text-[10.5px] text-slate-700 flex flex-col gap-3">
+                        <span className="font-bold text-slate-900 block border-b border-rose-100 pb-1.5">👉 Recommended Solutions (Choose One):</span>
+                        
+                        <div className="flex flex-col gap-1 pl-2 border-l-2 border-rose-400">
+                          <span className="font-extrabold text-xs text-rose-900">Option A: Switch to Service Role Key (Highly Recommended)</span>
+                          <span className="leading-relaxed text-[10px] text-slate-600">
+                            Navigate to <strong>Supabase &gt; Project Settings &gt; API</strong> and copy your <strong>service_role</strong> private JWT token (which possesses full bypass clearance). Paste it in the <strong>Advanced Connection Details</strong> tab above inside the <em>Supabase Service Role / Key</em> field. This runs securely entirely server-to-server and is the standard for custom backends.
+                          </span>
+                        </div>
+
+                        <div className="flex flex-col gap-1 pl-2 border-l-2 border-rose-400 mt-1.5 font-sans">
+                          <span className="font-extrabold text-xs text-rose-900">Option B: Run a Security Policy Override SQL Query</span>
+                          <span className="leading-relaxed text-[10px] text-slate-600">
+                            Alternatively, open your <strong>Supabase Console &gt; SQL Editor</strong>, start a new query sheet, copy and run the following queries to declare read & write access rules on your table:
+                          </span>
+                          <pre className="bg-slate-900 text-slate-200 p-2.5 rounded-lg font-mono text-[9px] overflow-x-auto select-all max-h-40 mt-1.5 border border-slate-800 shadow-inner">
+{`ALTER TABLE IF EXISTS public.cambodia_postcode_migration ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Enable select access for everyone" ON "public"."cambodia_postcode_migration" FOR SELECT USING (true);
+CREATE POLICY "Enable insert access for everyone" ON "public"."cambodia_postcode_migration" FOR INSERT WITH CHECK (true);
+CREATE POLICY "Enable update access for everyone" ON "public"."cambodia_postcode_migration" FOR UPDATE USING (true);
+CREATE POLICY "Enable delete access for everyone" ON "public"."cambodia_postcode_migration" FOR DELETE USING (true);`}
+                          </pre>
+                        </div>
+                      </div>
+
+                      <div className="flex justify-end gap-2 mt-1">
+                        <button 
+                          type="button" 
+                          onClick={() => setSupabaseRlsError(null)}
+                          className="bg-rose-100 hover:bg-rose-200 text-rose-800 font-bold px-3 py-1.5 rounded-lg text-[10px] uppercase transition-all tracking-wider font-mono cursor-pointer"
+                        >
+                          Dismiss Warning
+                        </button>
+                      </div>
+                    </div>
+                  )}
                 </div>
               </div>
 
@@ -5259,6 +5391,95 @@ ON CONFLICT (email) DO NOTHING;`;
                   </table>
                 </div>
               </div>
+
+              {/* CLOUD DB CONFIGURATION PLATFORM SETTINGS ENGINE */}
+              <div className="flex flex-col sm:flex-row items-stretch justify-between gap-4 bg-slate-50 border border-slate-250/75 rounded-xl p-4.5 mt-2 animate-fadeIn">
+                <div className="flex flex-col gap-1.5 max-w-xl">
+                  <div className="flex items-center gap-2">
+                    <span className="font-extrabold text-[12px] text-slate-800 tracking-wide uppercase font-mono">
+                      ☁️ Cloud Access & Permissions Sync
+                    </span>
+                    {roleFeaturesSource === "database" ? (
+                      <span className="bg-emerald-50 text-emerald-700 px-2 py-0.5 font-black text-[9px] rounded-md border border-emerald-200 uppercase tracking-widest font-mono animate-pulse">
+                        ● Cloud Persisted
+                      </span>
+                    ) : (
+                      <span className="bg-amber-50 text-amber-700 px-2 py-0.5 font-black text-[9px] rounded-md border border-amber-200 uppercase tracking-widest font-mono">
+                        ⚙️ Local Memory Fallback
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-slate-500 text-[10.5px] leading-relaxed">
+                    Tweak and adjust features assigned to baseline user classes. Click <strong>Apply & Persist Roles</strong> to lock coordinates and permission grids permanently inside your connected database.
+                  </p>
+                </div>
+                <div className="flex flex-col sm:flex-row items-center gap-2.5 shrink-0 self-center">
+                  <button
+                    type="button"
+                    onClick={() => setShowDbInfoPanel(!showDbInfoPanel)}
+                    className="flex items-center gap-1.5 px-3 py-2 border border-slate-300 hover:border-slate-400 bg-white hover:bg-slate-50 text-slate-700 rounded-lg text-[10px] uppercase font-bold tracking-wider font-mono cursor-pointer transition-all"
+                  >
+                    <span>{showDbInfoPanel ? "Hide DB Guide" : "Get SQL Schema"}</span>
+                    <Settings className="w-3.5 h-3.5 text-slate-500" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleSaveRoleFeatures}
+                    disabled={rolesSaving}
+                    className="bg-indigo-650 hover:bg-indigo-700 disabled:bg-slate-350 text-white font-extrabold px-4 py-2 rounded-lg text-[10.5px] uppercase transition-all tracking-wider font-mono cursor-pointer flex items-center gap-1.5 shadow-xs"
+                  >
+                    {rolesSaving ? "Syncing..." : "Apply & Persist Roles"}
+                  </button>
+                </div>
+              </div>
+
+              {/* SQL SCHEMAS AND PERMANENT STORAGE ACTIVATION GUIDE */}
+              {showDbInfoPanel && (
+                <div className="border border-indigo-100 bg-indigo-50/40 rounded-xl p-4.5 sm:p-5.5 animate-slideDown flex flex-col gap-4">
+                  <div className="flex items-start gap-3">
+                    <div className="bg-indigo-100 p-2 rounded text-indigo-600 shrink-0">
+                      <Database className="w-5 h-5 text-indigo-600" />
+                    </div>
+                    <div>
+                      <h5 className="font-extrabold text-[12.5px] text-indigo-950 flex items-center gap-1.5 uppercase font-mono tracking-wide">
+                        Supabase Permanent Settings Table Setup
+                      </h5>
+                      <p className="text-slate-600 text-[11px] mt-1.5 leading-relaxed max-w-3xl">
+                        By default, customize parameters (logos, titles, background files, search toggles) and role access hierarchies are kept within ephemeral server files on your container hosting node. <strong>To prevent settings from resetting during normal server idle sleeps or fresh client browser re-logins</strong>, create the persistent settings table to synchronize state with your Supabase master database.
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="bg-white border border-indigo-100 rounded-xl p-4 text-[10.5px] text-slate-700 flex flex-col gap-3">
+                    <span className="font-bold text-slate-900 block border-b border-indigo-50 pb-2">📂 Instruction Guide:</span>
+                    <ol className="list-decimal pl-4.5 flex flex-col gap-1.5 leading-relaxed font-sans">
+                      <li>Go to your <strong>Supabase Project Console</strong> and click on the <strong>SQL Editor</strong> in the left sidebar.</li>
+                      <li>Click <strong>New Query</strong> to start a blank document page.</li>
+                      <li>Copy the SQL script below and click <strong>Run</strong> (this establishes the schema metadata and Row Level Security bypass parameters).</li>
+                      <li>Check back here and click <strong>Apply & Persist Roles</strong> to transfer your memory records to the cloud database successfully!</li>
+                    </ol>
+
+                    <span className="font-bold text-indigo-900 mt-2 block">📋 SQL Query Template:</span>
+                    <pre className="bg-slate-900 text-slate-200 p-3 rounded-lg font-mono text-[9px] sm:text-[10px] overflow-x-auto select-all max-h-48 border border-slate-800 shadow-inner leading-relaxed">
+{`-- Create table to hold global parameters, images, and RBAC features
+CREATE TABLE IF NOT EXISTS public.platform_settings (
+  key text PRIMARY KEY,
+  value jsonb NOT NULL,
+  updated_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+-- Enable RLS access
+ALTER TABLE IF EXISTS public.platform_settings ENABLE ROW LEVEL SECURITY;
+
+-- Dynamic bypass permissions for universal read & write clearance
+CREATE POLICY "Enable select access for everyone" ON "public"."platform_settings" FOR SELECT USING (true);
+CREATE POLICY "Enable insert access for everyone" ON "public"."platform_settings" FOR INSERT WITH CHECK (true);
+CREATE POLICY "Enable update access for everyone" ON "public"."platform_settings" FOR UPDATE USING (true);
+CREATE POLICY "Enable delete access for everyone" ON "public"."platform_settings" FOR DELETE USING (true);`}
+                    </pre>
+                  </div>
+                </div>
+              )}
             </div>
 
           </div>
