@@ -1279,6 +1279,110 @@ app.post("/api/postcodes/sync-to-local", async (req, res) => {
   }
 });
 
+app.post("/api/postcodes/purge-local-cache", async (req, res) => {
+  try {
+    console.log("Removing all local postcode data and cache from local machine/server files...");
+    
+    // 1. Remove all data by writing an empty array to the memory and the active data files
+    postcodeMemoryDb = [];
+    try {
+      if (fs.existsSync(dataFilePath)) {
+        fs.writeFileSync(dataFilePath, JSON.stringify([], null, 2), "utf-8");
+      }
+      if (fs.existsSync(backupFilePath)) {
+        fs.writeFileSync(backupFilePath, JSON.stringify([], null, 2), "utf-8");
+      }
+      console.log("Cleared active and backup JSON files on local machine disk.");
+    } catch (diskErr: any) {
+      console.warn("Could not wipe disk files, but cleared in-memory cache:", diskErr.message);
+    }
+
+    // 2. Load from Database
+    if (!isSupabaseConfigured()) {
+      return res.json({
+        success: true,
+        message: "Successfully purged local cache! (Notice: No live Supabase database is currently connected, so table was initialized to empty)."
+      });
+    }
+
+    console.log("Loading latest postcode records directly from Supabase to repopulate local database cache...");
+    let allRows: any[] = [];
+    let page = 0;
+    const pageSize = 1000;
+    let hasMore = true;
+
+    while (hasMore) {
+      const from = page * pageSize;
+      const to = from + pageSize - 1;
+      const url = `${SUPABASE_URL}/rest/v1/${SUPABASE_TABLE_NAME}?select=*&order=id.asc`;
+      const response = await fetch(url, {
+        method: "GET",
+        headers: {
+          "apikey": SUPABASE_KEY!,
+          "Authorization": `Bearer ${SUPABASE_KEY}`,
+          "Content-Type": "application/json",
+          "Range": `${from}-${to}`
+        }
+      });
+
+      if (response.ok) {
+        const rawData = await response.json();
+        if (Array.isArray(rawData) && rawData.length > 0) {
+          allRows = allRows.concat(rawData);
+          if (rawData.length < pageSize) {
+            hasMore = false;
+          } else {
+            page++;
+          }
+        } else {
+          hasMore = false;
+        }
+      } else {
+        const errorText = await response.text();
+        console.error(`Purge-load: Supabase pull failed on page ${page}:`, errorText);
+        return res.status(500).json({ error: `Purge succeeded but failed to load fresh rows from Supabase.`, details: errorText });
+      }
+    }
+
+    if (allRows.length > 0) {
+      const mappedEntries = allRows.map((row: any) => ({
+        id: String(row.id),
+        province: String(row.new_country_division || row.city_province || row.province || ""),
+        district: String(row.district || ""),
+        commune: String(row.commune || row.sangkat_commune || row.new_city_name || ""),
+        existing_postcode: String(row.x_postcode !== undefined ? row.x_postcode : (row.existing_postcode || "")),
+        new_postcode: String(row.new_postcode || ""),
+        new_country_division: String(row.new_country_division || row.city_province || row.province || ""),
+        new_city_name: String(row.new_city_name || ""),
+        ib_sort_co: String(row.ib_sort_co || ""),
+        inbound_fac: String(row.inbound_fac || "")
+      }));
+
+      // write back to local machine so it's fully populated
+      writeDatabase(mappedEntries);
+      try {
+        fs.writeFileSync(backupFilePath, JSON.stringify(mappedEntries, null, 2), "utf-8");
+      } catch (backupErr) {}
+
+      console.log(`Successfully purged local cache and loaded ${mappedEntries.length} records freshly from Supabase.`);
+      return res.json({
+        success: true,
+        message: `Successfully purged local machine cache! Reloaded and cached ${mappedEntries.length} records dynamically from Supabase database.`,
+        count: mappedEntries.length
+      });
+    } else {
+      return res.json({
+        success: true,
+        message: "Successfully purged local cache! (No records found in active database table)."
+      });
+    }
+
+  } catch (err: any) {
+    console.error("Purge local cache and load database failed:", err);
+    return res.status(500).json({ error: "Failed to purge local cache or load from database.", details: err.message });
+  }
+});
+
 // Admin users logic and endpoints (Supabase platform_admins synchronized with local file fallbacks)
 interface AdminUser {
   id: string;

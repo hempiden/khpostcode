@@ -2247,6 +2247,30 @@ ON CONFLICT (email) DO NOTHING;`;
     }
   };
 
+  const handlePurgeCacheAndLoadFromDB = async () => {
+    if (!window.confirm("Are you sure you want to completely PURGE all local/cached postcode and locate records from this server/local machine and download all fresh entries directly from the connected database? This is irreversible.")) {
+      return;
+    }
+    try {
+      setSuccessMessage("Purging local cache files and pulling fresh database master entries...");
+      const res = await fetch("/api/postcodes/purge-local-cache", { method: "POST" });
+      if (res.ok) {
+        const result = await res.json();
+        setSuccessMessage(result.message || "Successfully purged local cache and loaded fresh data from remote database!");
+        setTimeout(() => setSuccessMessage(null), 6000);
+        fetchPostcodes();
+        await checkLiveApis();
+      } else {
+        const errDetail = await res.json().catch(() => ({}));
+        setErrorMessage(errDetail.error || "Failed to purge local cache and reload from database.");
+        setTimeout(() => setErrorMessage(null), 5000);
+      }
+    } catch (err) {
+      setErrorMessage("Could not connect to the purge-local-cache gateway.");
+      setTimeout(() => setErrorMessage(null), 5000);
+    }
+  };
+
   // Auth & Admin Login Controls (uses secure backend login with complete client-side fallback for static hostings e.g. Vercel)
   const handleLoginSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -3731,7 +3755,17 @@ ON CONFLICT (email) DO NOTHING;`;
                 </p>
               </div>
 
-              <div className="flex gap-2 flex-wrap">
+              <div className="flex gap-2 flex-wrap animate-fadeIn">
+                {hasPermission(currentUser.role, "allowDatabaseCrud") && (
+                  <button
+                    onClick={handlePurgeCacheAndLoadFromDB}
+                    className="px-3.5 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-lg text-xs font-bold flex items-center gap-1.5 shadow-sm transition-all cursor-pointer border border-rose-500/20"
+                    title="Remove all local cached postcode records on the server and pull clean entries directly from the connected database"
+                  >
+                    <Trash2 className="w-3.5 h-3.5 text-white" />
+                    Purge Cache & Load DB
+                  </button>
+                )}
                 {currentUser.role === "superadmin" && (
                   <button
                     onClick={handlePullLatestData}
@@ -4407,14 +4441,24 @@ ON CONFLICT (email) DO NOTHING;`;
                                 <RotateCcw className="w-3 h-3" /> Execute System Diagnostic
                               </button>
                               {supabaseLiveStatus.status === "connected" && (
-                                <button
-                                  type="button"
-                                  onClick={handleSyncToLocal}
-                                  className="px-3 py-1.5 bg-amber-400 hover:bg-amber-500 text-slate-950 rounded-lg text-[10px] font-extrabold flex items-center gap-1.5 transition-all cursor-pointer"
-                                  title="Download and copy whole record dataset from your live Supabase into offline server cache"
-                                >
-                                  <CloudDownload className="w-3.5 h-3.5" /> Replicate Supabase to Local
-                                </button>
+                                <>
+                                  <button
+                                    type="button"
+                                    onClick={handleSyncToLocal}
+                                    className="px-3 py-1.5 bg-amber-400 hover:bg-amber-500 text-slate-950 rounded-lg text-[10px] font-extrabold flex items-center gap-1.5 transition-all cursor-pointer"
+                                    title="Download and copy whole record dataset from your live Supabase into offline server cache"
+                                  >
+                                    <CloudDownload className="w-3.5 h-3.5" /> Replicate Supabase to Local
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={handlePurgeCacheAndLoadFromDB}
+                                    className="px-3 py-1.5 bg-rose-600 hover:bg-rose-700 text-white rounded-lg text-[10px] font-extrabold flex items-center gap-1.5 transition-all cursor-pointer border border-rose-500/20"
+                                    title="Wipe local cache/file and download master entries freshly from Supabase"
+                                  >
+                                    <Trash2 className="w-3.5 h-3.5 text-white" /> Purge Cache & Load DB
+                                  </button>
+                                </>
                               )}
                             </div>
                           </div>
