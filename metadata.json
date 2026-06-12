@@ -1,6 +1,6 @@
 {
-  "name": "Cambodia Postcode Migrator",
-  "description": "An AI assistant specialized in Cambodian administrative geography and postcode migration.",
+  "name": "Cambodia Postcode",
+  "description": "An AI assistant specialized in Cambodian administrative geography and postcode.",
   "requestFramePermissions": ["geolocation"],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }
