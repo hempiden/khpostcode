@@ -1,7 +1,6 @@
 import express from "express";
 import path from "path";
 import fs from "fs";
-import { createServer as createViteServer } from "vite";
 import { GoogleGenAI, Type } from "@google/genai";
 import dotenv from "dotenv";
 
@@ -775,15 +774,39 @@ app.get("/api/test-gemini", async (req, res) => {
   });
 });
 
+// Secrets must never reach the browser in full: the client fallbacks all skip
+// keys containing "••••", so masked values keep the UI informative but unusable.
+function maskSecret(value: string | undefined): string {
+  const v = String(value || "").trim();
+  if (!v) return "";
+  return v.slice(0, 6) + "••••";
+}
+
+function maskConfigSecrets(config: ApiConfig): ApiConfig {
+  return {
+    ...config,
+    supabaseKey: maskSecret(config.supabaseKey),
+    geminiKey: maskSecret(config.geminiKey)
+  };
+}
+
 // Settings Persistence Gateways for Superadmin Profile Sync
 app.get("/api/get-config", (req, res) => {
-  res.json(getApiConfig());
+  res.json(maskConfigSecrets(getApiConfig()));
 });
 
 app.post("/api/save-config", (req, res) => {
-  const success = writeApiConfig(req.body);
+  const incoming = { ...req.body };
+  // The settings console echoes masked placeholders back; drop them so they
+  // never overwrite the real stored secrets.
+  for (const field of ["supabaseKey", "geminiKey"]) {
+    if (typeof incoming[field] === "string" && incoming[field].includes("••••")) {
+      delete incoming[field];
+    }
+  }
+  const success = writeApiConfig(incoming);
   if (success) {
-    res.json({ success: true, config: getApiConfig() });
+    res.json({ success: true, config: maskConfigSecrets(getApiConfig()) });
   } else {
     res.status(550).json({ error: "Failed to save configuration database on the server" });
   }
@@ -2082,6 +2105,8 @@ ${databaseReferenceText}
 // Start custom server and integrate Vite
 async function startServer() {
   if (process.env.NODE_ENV !== "production") {
+    // Dynamic import keeps vite out of the serverless bundle on Vercel
+    const { createServer: createViteServer } = await import("vite");
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: "spa",
@@ -2106,4 +2131,16 @@ async function startServer() {
   });
 }
 
-startServer();
+if (process.env.VERCEL) {
+  // On Vercel the app runs as a serverless function (see api/index.ts) and
+  // static assets are served by the platform, so we never call listen().
+  // Settings sync is fired on cold start; requests fall back to file config
+  // until it completes.
+  syncFromDatabase().catch((e) =>
+    console.error("[Platform Settings] Cold-start settings sync failed:", e)
+  );
+} else {
+  startServer();
+}
+
+export default app;
