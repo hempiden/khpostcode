@@ -1,6 +1,7 @@
 import express from "express";
 import path from "path";
 import fs from "fs";
+import { createServer as createViteServer } from "vite";
 import { GoogleGenAI, Type } from "@google/genai";
 import dotenv from "dotenv";
 
@@ -123,13 +124,9 @@ let cachedDbConfig: Partial<ApiConfig> | null = null;
 let cachedDbRoleFeaturesList: any[] | null = null;
 
 async function fetchFromSupabaseSettings(key: string): Promise<any | null> {
-  const url = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.VITE_SUPABASE_URL || (cachedDbConfig && cachedDbConfig.supabaseUrl) || "";
-  const initialConfigTemp = getApiConfigOnlyFile();
-  const activeUrl = url ? sanitizeSupabaseUrl(url) : sanitizeSupabaseUrl(initialConfigTemp.supabaseUrl);
-  
-  // Try using env service_role first or env key, fallback to local/decrypted configuration
-  const secretKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SECRET_KEY || process.env.NEXT_PUBLIC_SUPABASE_SUPABASE_SECRET_KEY || process.env.SUPABASE_KEY || process.env.SUPABASE_ANON_KEY || (cachedDbConfig && cachedDbConfig.supabaseKey) || initialConfigTemp.supabaseKey || "";
-  const activeKey = sanitizeSupabaseKey(secretKey);
+  const creds = getSupabaseCredentials();
+  const activeUrl = creds.url;
+  const activeKey = creds.key;
 
   if (!activeUrl || !activeKey) return null;
   try {
@@ -153,12 +150,9 @@ async function fetchFromSupabaseSettings(key: string): Promise<any | null> {
 }
 
 async function saveToSupabaseSettings(key: string, value: any): Promise<boolean> {
-  const url = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.VITE_SUPABASE_URL || (cachedDbConfig && cachedDbConfig.supabaseUrl) || "";
-  const initialConfigTemp = getApiConfigOnlyFile();
-  const activeUrl = url ? sanitizeSupabaseUrl(url) : sanitizeSupabaseUrl(initialConfigTemp.supabaseUrl);
-  
-  const secretKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SECRET_KEY || process.env.NEXT_PUBLIC_SUPABASE_SUPABASE_SECRET_KEY || process.env.SUPABASE_KEY || process.env.SUPABASE_ANON_KEY || (cachedDbConfig && cachedDbConfig.supabaseKey) || initialConfigTemp.supabaseKey || "";
-  const activeKey = sanitizeSupabaseKey(secretKey);
+  const creds = getSupabaseCredentials();
+  const activeUrl = creds.url;
+  const activeKey = creds.key;
 
   if (!activeUrl || !activeKey) return false;
   try {
@@ -231,10 +225,13 @@ function getApiConfig(): ApiConfig {
   const envGeminiKey = process.env.GEMINI_API_KEY || process.env.VITE_GEMINI_API_KEY || process.env.VITE_GEMINI_KEY;
 
   const resolveVal = (fileVal: string | undefined, envVal: string | undefined): string => {
+    if (envVal !== undefined && envVal.trim() !== "" && envVal.trim() !== "MY_SUPABASE_KEY" && envVal.trim() !== "sb_secret_YvGsedNUdgCdnMP32TOi2g_4fh1AjhO") {
+      return envVal.trim();
+    }
     if (fileVal !== undefined && fileVal.trim() !== "") {
       return fileVal.trim();
     }
-    return (envVal || "").trim();
+    return "";
   };
 
   let config: ApiConfig = {
@@ -326,16 +323,39 @@ let SUPABASE_TABLE_NAME = sanitizeSupabaseTable(initialConfig.supabaseTableName)
 
 // Dynamic credentials resolver to override local file config with system env variables at runtime (highly-privileged bypass)
 function getSupabaseCredentials() {
-  const url = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.VITE_SUPABASE_URL || initialConfig.supabaseUrl || "";
-  const table = process.env.SUPABASE_TABLE_NAME || process.env.VITE_SUPABASE_TABLE_NAME || process.env.NEXT_PUBLIC_SUPABASE_TABLE_NAME || initialConfig.supabaseTableName || "cambodia_postcode_migration";
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL || 
+              process.env.VITE_SUPABASE_URL || 
+              process.env.SUPABASE_URL || 
+              process.env.NEXT_PUBLIC_SUPABASE_SUPABASE_URL || 
+              process.env.NEXT_PUBLIC_NEXT_PUBLIC_SUPABASE_URL || 
+              initialConfig.supabaseUrl || "";
+              
+  const table = process.env.SUPABASE_TABLE_NAME || 
+                process.env.VITE_SUPABASE_TABLE_NAME || 
+                process.env.NEXT_PUBLIC_SUPABASE_TABLE_NAME || 
+                initialConfig.supabaseTableName || "cambodia_postcode_migration";
   
   // Prefer service_role or env key if available on server for full bypass of RLS policies
-  const secretKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SECRET_KEY || process.env.NEXT_PUBLIC_SUPABASE_SUPABASE_SECRET_KEY;
+  const secretKey = process.env.SUPABASE_SERVICE_ROLE_KEY || 
+                    process.env.SUPABASE_SECRET_KEY || 
+                    process.env.NEXT_PUBLIC_SUPABASE_SUPABASE_SECRET_KEY;
+                    
   if (secretKey && secretKey.trim() !== "") {
     return { url: sanitizeSupabaseUrl(url), key: secretKey.trim(), table: sanitizeSupabaseTable(table) };
   }
   
-  const envKey = process.env.SUPABASE_KEY || process.env.SUPABASE_ANON_KEY;
+  const envKey = process.env.SUPABASE_SECRET_KEY || 
+                 process.env.NEXT_PUBLIC_SUPABASE_SUPABASE_SECRET_KEY || 
+                 process.env.NEXT_PUBLIC_NEXT_PUBLIC_SUPABASE_SUPABASE_ANON_KEY || 
+                 process.env.SUPABASE_SERVICE_ROLE_KEY || 
+                 process.env.SUPABASE_ANON_KEY || 
+                 process.env.SUPABASE_KEY || 
+                 process.env.NEXT_PUBLIC_SUPABASE_KEY || 
+                 process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY || 
+                 process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || 
+                 process.env.VITE_SUPABASE_ANON_KEY ||
+                 process.env.VITE_SUPABASE_KEY;
+                 
   if (envKey && envKey.trim() !== "" && envKey !== "MY_SUPABASE_KEY") {
     return { url: sanitizeSupabaseUrl(url), key: envKey.trim(), table: sanitizeSupabaseTable(table) };
   }
@@ -756,38 +776,14 @@ app.get("/api/test-gemini", async (req, res) => {
 });
 
 // Settings Persistence Gateways for Superadmin Profile Sync
-// Secrets must never reach the browser in full: the client fallbacks all skip
-// keys containing "••••", so masked values keep the UI informative but unusable.
-function maskSecret(value: string | undefined): string {
-  const v = String(value || "").trim();
-  if (!v) return "";
-  return v.slice(0, 6) + "••••";
-}
-
-function maskConfigSecrets(config: ApiConfig): ApiConfig {
-  return {
-    ...config,
-    supabaseKey: maskSecret(config.supabaseKey),
-    geminiKey: maskSecret(config.geminiKey)
-  };
-}
-
 app.get("/api/get-config", (req, res) => {
-  res.json(maskConfigSecrets(getApiConfig()));
+  res.json(getApiConfig());
 });
 
 app.post("/api/save-config", (req, res) => {
-  const incoming = { ...req.body };
-  // The settings console echoes masked placeholders back; drop them so they
-  // never overwrite the real stored secrets.
-  for (const field of ["supabaseKey", "geminiKey"]) {
-    if (typeof incoming[field] === "string" && incoming[field].includes("••••")) {
-      delete incoming[field];
-    }
-  }
-  const success = writeApiConfig(incoming);
+  const success = writeApiConfig(req.body);
   if (success) {
-    res.json({ success: true, config: maskConfigSecrets(getApiConfig()) });
+    res.json({ success: true, config: getApiConfig() });
   } else {
     res.status(550).json({ error: "Failed to save configuration database on the server" });
   }
@@ -2086,8 +2082,6 @@ ${databaseReferenceText}
 // Start custom server and integrate Vite
 async function startServer() {
   if (process.env.NODE_ENV !== "production") {
-    // Dynamic import keeps vite out of the serverless bundle on Vercel
-    const { createServer: createViteServer } = await import("vite");
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: "spa",
@@ -2112,16 +2106,4 @@ async function startServer() {
   });
 }
 
-if (process.env.VERCEL) {
-  // On Vercel the app runs as a serverless function (see api/index.ts) and
-  // static assets are served by the platform, so we never call listen().
-  // Settings sync is fired on cold start; requests fall back to file config
-  // until it completes.
-  syncFromDatabase().catch((e) =>
-    console.error("[Platform Settings] Cold-start settings sync failed:", e)
-  );
-} else {
-  startServer();
-}
-
-export default app;
+startServer();
