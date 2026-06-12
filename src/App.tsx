@@ -4757,6 +4757,11 @@ ON CONFLICT (email) DO NOTHING;`;
                           <pre className="bg-slate-900 text-slate-200 p-2.5 rounded-lg font-mono text-[9px] overflow-x-auto select-all max-h-40 mt-1.5 border border-slate-800 shadow-inner">
 {`ALTER TABLE IF EXISTS public.cambodia_postcode_migration ENABLE ROW LEVEL SECURITY;
 
+DROP POLICY IF EXISTS "Enable select access for everyone" ON "public"."cambodia_postcode_migration";
+DROP POLICY IF EXISTS "Enable insert access for everyone" ON "public"."cambodia_postcode_migration";
+DROP POLICY IF EXISTS "Enable update access for everyone" ON "public"."cambodia_postcode_migration";
+DROP POLICY IF EXISTS "Enable delete access for everyone" ON "public"."cambodia_postcode_migration";
+
 CREATE POLICY "Enable select access for everyone" ON "public"."cambodia_postcode_migration" FOR SELECT USING (true);
 CREATE POLICY "Enable insert access for everyone" ON "public"."cambodia_postcode_migration" FOR INSERT WITH CHECK (true);
 CREATE POLICY "Enable update access for everyone" ON "public"."cambodia_postcode_migration" FOR UPDATE USING (true);
@@ -5471,7 +5476,7 @@ CREATE POLICY "Enable delete access for everyone" ON "public"."cambodia_postcode
                     type="button"
                     onClick={handleSaveRoleFeatures}
                     disabled={rolesSaving}
-                    className="bg-indigo-650 hover:bg-indigo-700 disabled:bg-slate-350 text-white font-extrabold px-4 py-2 rounded-lg text-[10.5px] uppercase transition-all tracking-wider font-mono cursor-pointer flex items-center gap-1.5 shadow-xs"
+                    className="bg-indigo-600 hover:bg-indigo-700 disabled:bg-slate-300 disabled:text-slate-500 disabled:cursor-not-allowed text-white font-extrabold px-4 py-2 rounded-lg text-[10.5px] uppercase transition-all tracking-wider font-mono cursor-pointer flex items-center gap-1.5 shadow-xs"
                   >
                     {rolesSaving ? "Syncing..." : "Apply & Persist Roles"}
                   </button>
@@ -5517,6 +5522,11 @@ CREATE TABLE IF NOT EXISTS public.platform_settings (
 ALTER TABLE IF EXISTS public.platform_settings ENABLE ROW LEVEL SECURITY;
 
 -- Dynamic bypass permissions for universal read & write clearance
+DROP POLICY IF EXISTS "Enable select access for everyone" ON "public"."platform_settings";
+DROP POLICY IF EXISTS "Enable insert access for everyone" ON "public"."platform_settings";
+DROP POLICY IF EXISTS "Enable update access for everyone" ON "public"."platform_settings";
+DROP POLICY IF EXISTS "Enable delete access for everyone" ON "public"."platform_settings";
+
 CREATE POLICY "Enable select access for everyone" ON "public"."platform_settings" FOR SELECT USING (true);
 CREATE POLICY "Enable insert access for everyone" ON "public"."platform_settings" FOR INSERT WITH CHECK (true);
 CREATE POLICY "Enable update access for everyone" ON "public"."platform_settings" FOR UPDATE USING (true);
