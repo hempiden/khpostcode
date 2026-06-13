@@ -900,6 +900,146 @@ async function updateSearchHistoryRating(id: string, rating: "up" | "down" | nul
   return false;
 }
 
+// Secondary High-Fidelity Google Geocoding proxy resolver
+async function geocodeAddressWithGoogle(
+  text: string,
+  apiKey: string
+): Promise<{ province: string; district: string; commune: string; formattedAddress: string } | null> {
+  if (!apiKey || apiKey.includes("••••") || apiKey.trim().length < 10) return null;
+  try {
+    const url = `https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(text)}&key=${apiKey}`;
+    const res = await fetch(url);
+    if (res.ok) {
+      const data = await res.json();
+      if (data.status === "OK" && data.results && data.results[0]) {
+        const firstResult = data.results[0];
+        let gProvince = "";
+        let gDistrict = "";
+        let gCommune = "";
+
+        firstResult.address_components.forEach((comp: any) => {
+          const types = comp.types || [];
+          if (types.includes("administrative_area_level_1")) {
+            gProvince = comp.long_name;
+          } else if (types.includes("administrative_area_level_2") || types.includes("locality")) {
+            gDistrict = comp.long_name;
+          } else if (types.includes("sublocality_level_1") || types.includes("sublocality") || types.includes("neighborhood") || types.includes("administrative_area_level_3")) {
+            gCommune = comp.long_name;
+          }
+        });
+
+        return {
+          province: gProvince,
+          district: gDistrict,
+          commune: gCommune,
+          formattedAddress: firstResult.formatted_address || text
+        };
+      }
+    }
+  } catch (err) {
+    console.error("Geocoding failed inside geocodeAddressWithGoogle:", err);
+  }
+  return null;
+}
+
+// Server-side Geocoded address components to Postcode Database fuzzy aligning engine
+function fuzzyMatchGeocodedAddress(
+  gProvince: string,
+  gDistrict: string,
+  gCommune: string,
+  db: PostcodeEntry[],
+  originalInputText: string
+): any {
+  const normalizeComponent = (str: string) => {
+    if (!str) return "";
+    return str
+      .toLowerCase()
+      .replace(/\b(province|capital|khan|sangkat|krong|district|municipality|commune|capital city)\b/gi, "")
+      .replace(/[‘’'"`]/g, "")
+      .replace(/[^a-z0-9]/gi, " ")
+      .trim();
+  };
+
+  const normGProv = normalizeComponent(gProvince);
+  const normGDist = normalizeComponent(gDistrict);
+  const normGComm = normalizeComponent(gCommune);
+
+  if (!normGProv) return null;
+
+  let bestEntry: PostcodeEntry | null = null;
+  let bestScore = 0;
+
+  for (const item of db) {
+    const normDbProv = normalizeComponent(item.province);
+    const normDbDist = normalizeComponent(item.district);
+    const normDbComm = normalizeComponent(item.commune);
+
+    let score = 0;
+
+    // Weight allocation out of 100
+    // Province mapping (max 20)
+    if (normDbProv && normGProv && (normDbProv === normGProv || normDbProv.includes(normGProv) || normGProv.includes(normDbProv))) {
+      score += 20;
+    }
+
+    // District mapping (max 35)
+    if (normDbDist && normGDist) {
+      if (normDbDist === normGDist) {
+        score += 35;
+      } else if (normDbDist.includes(normGDist) || normGDist.includes(normDbDist)) {
+        score += 24;
+      }
+    }
+
+    // Commune mapping (max 45)
+    if (normDbComm && normGComm) {
+      if (normDbComm === normGComm) {
+        score += 45;
+      } else if (normDbComm.includes(normGComm) || normGComm.includes(normDbComm)) {
+        score += 30;
+      }
+    }
+
+    if (score > bestScore) {
+      bestScore = score;
+      bestEntry = item;
+    }
+  }
+
+  // Acceptance benchmark is score >= 40 (meaning we matched province + district/commune)
+  if (bestEntry && bestScore >= 40) {
+    const numbersFound: string[] = (originalInputText || "").match(/\b\d{5,6}\b/g) || [];
+    let status = "No Postcode Detected";
+    const matchesNew = numbersFound.includes(bestEntry.new_postcode);
+    const matchesExisting = bestEntry.existing_postcode ? numbersFound.includes(bestEntry.existing_postcode) : false;
+
+    if (numbersFound.length > 0) {
+      if (matchesNew) {
+        status = "Follow New Postcode";
+      } else if (matchesExisting) {
+        status = "Follow Existing Postcode";
+      } else {
+        status = "Incorrect Postcode";
+      }
+    }
+
+    return {
+      province: bestEntry.province,
+      district: bestEntry.district,
+      commune: bestEntry.commune,
+      postcode_status: status,
+      existing_postcode: bestEntry.existing_postcode || "",
+      new_postcode: bestEntry.new_postcode || "",
+      new_city_name: bestEntry.new_city_name || "",
+      ib_sort_co: bestEntry.ib_sort_co || "",
+      inbound_fac: bestEntry.inbound_fac || "",
+      score: bestScore
+    };
+  }
+
+  return null;
+}
+
 // Normalized, high-accuracy local fuzzy matcher with a 0.0 - 1.0 confidence score
 function normalizedFuzzyMatch(inputText: string, db: PostcodeEntry[]): any {
   const cleanInput = (inputText || "").trim().toLowerCase();
@@ -2559,6 +2699,8 @@ app.post("/api/migrate", async (req, res) => {
     const aiInputs: string[] = [];
     const aiIndices: number[] = [];
 
+    const googleMapsKey = initialConfig.googleMapsKey || process.env.VITE_GOOGLE_MAPS_KEY || process.env.GOOGLE_MAPS_PLATFORM_KEY || "";
+
     for (let i = 0; i < scratchInputs.length; i++) {
       const inputText = scratchInputs[i];
       const origIndex = scratchIndices[i];
@@ -2576,10 +2718,39 @@ app.post("/api/migrate", async (req, res) => {
         };
         console.log(`[Status] Resolved '${inputText}' using premium local fuzzy matcher (Score: ${fuzzyResult.score}%)`);
       } else {
-        // Fall back to AI matching
-        aiInputs.push(inputText);
-        aiIndices.push(origIndex);
-        console.log(`[Status] Route '${inputText}' to AI/Gemini matching engine (Fuzzy confidence too low)`);
+        // If Google Maps API Key is active, let's identify via Google first!
+        let googleFuzzyMatched = null;
+        if (googleMapsKey && !googleMapsKey.includes("••••") && googleMapsKey.trim().length > 10) {
+          try {
+            const geocoded = await geocodeAddressWithGoogle(inputText, googleMapsKey);
+            if (geocoded) {
+              googleFuzzyMatched = fuzzyMatchGeocodedAddress(geocoded.province, geocoded.district, geocoded.commune, postcodeDb, inputText);
+              if (googleFuzzyMatched) {
+                googleFuzzyMatched.input_text = `Google Geocode Match [${geocoded.formattedAddress}]`;
+              }
+            }
+          } catch (geoErr) {
+            console.error(`[Google Proxy Geocode Error] Failed to geocode text: ${inputText}`, geoErr);
+          }
+        }
+
+        if (googleFuzzyMatched) {
+          const scoreToLog = googleFuzzyMatched.score || 95;
+          const historyEntry = await addSearchHistory(inputText, googleFuzzyMatched, scoreToLog, dynamicCutoff);
+          processedResults[origIndex] = {
+            ...googleFuzzyMatched,
+            search_id: historyEntry.id,
+            confidence_score: scoreToLog,
+            benchmark_used: historyEntry.benchmark_used,
+            cached: false
+          };
+          console.log(`[Status] Resolved '${inputText}' using premium Google Geocoder & local fuzzy matcher (Score: ${scoreToLog}%)`);
+        } else {
+          // Fall back to AI matching
+          aiInputs.push(inputText);
+          aiIndices.push(origIndex);
+          console.log(`[Status] Route '${inputText}' to AI/Gemini matching engine (Fuzzy confidence too low)`);
+        }
       }
     }
 

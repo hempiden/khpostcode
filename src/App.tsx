@@ -264,6 +264,104 @@ const localPostcodeMatch = (inputText: string, db: PostcodeEntry[]): MigrationRe
   };
 };
 
+// Client-side component-level Google Geocode/Places fuzzy matcher
+const fuzzyMatchGeocodedAddress = (
+  gProvince: string,
+  gDistrict: string,
+  gCommune: string,
+  db: PostcodeEntry[],
+  originalInputText: string
+): (MigrationResult & { score: number }) | null => {
+  const normalizeComponent = (str: string) => {
+    if (!str) return "";
+    return str
+      .toLowerCase()
+      .replace(/\b(province|capital|khan|sangkat|krong|district|municipality|commune|capital city)\b/gi, "")
+      .replace(/[‘’'"`]/g, "")
+      .replace(/[^a-z0-9]/gi, " ")
+      .trim();
+  };
+
+  const normGProv = normalizeComponent(gProvince);
+  const normGDist = normalizeComponent(gDistrict);
+  const normGComm = normalizeComponent(gCommune);
+
+  if (!normGProv) return null;
+
+  let bestEntry: PostcodeEntry | null = null;
+  let bestScore = 0;
+
+  for (const item of db) {
+    const normDbProv = normalizeComponent(item.province);
+    const normDbDist = normalizeComponent(item.district);
+    const normDbComm = normalizeComponent(item.commune);
+
+    let score = 0;
+
+    // Province Match Weight (max 20 points)
+    if (normDbProv && normGProv && (normDbProv === normGProv || normDbProv.includes(normGProv) || normGProv.includes(normDbProv))) {
+      score += 20;
+    }
+
+    // District Match Weight (max 35 points)
+    if (normDbDist && normGDist) {
+      if (normDbDist === normGDist) {
+        score += 35;
+      } else if (normDbDist.includes(normGDist) || normGDist.includes(normDbDist)) {
+        score += 24;
+      }
+    }
+
+    // Commune Match Weight (max 45 points)
+    if (normDbComm && normGComm) {
+      if (normDbComm === normGComm) {
+        score += 45;
+      } else if (normDbComm.includes(normGComm) || normGComm.includes(normDbComm)) {
+        score += 30;
+      }
+    }
+
+    if (score > bestScore) {
+      bestScore = score;
+      bestEntry = item;
+    }
+  }
+
+  // Minimum threshold score of 40 points
+  if (bestEntry && bestScore >= 40) {
+    const numbersFound: string[] = (originalInputText || "").match(/\b\d{5,6}\b/g) || [];
+    let status: MigrationResult["postcode_status"] = "No Postcode Detected";
+    const matchesNew = numbersFound.includes(bestEntry.new_postcode);
+    const matchesExisting = bestEntry.existing_postcode ? numbersFound.includes(bestEntry.existing_postcode) : false;
+
+    if (numbersFound.length > 0) {
+      if (matchesNew) {
+        status = "Follow New Postcode";
+      } else if (matchesExisting) {
+        status = "Follow Existing Postcode";
+      } else {
+        status = "Incorrect Postcode";
+      }
+    }
+
+    return {
+      province: bestEntry.province,
+      district: bestEntry.district,
+      commune: bestEntry.commune,
+      postcode_status: status,
+      existing_postcode: bestEntry.existing_postcode || "",
+      new_postcode: bestEntry.new_postcode || "",
+      ib_sort_co: bestEntry.ib_sort_co || "",
+      inbound_fac: bestEntry.inbound_fac || "",
+      new_city_name: bestEntry.new_city_name || "",
+      input_text: originalInputText,
+      score: bestScore
+    };
+  }
+
+  return null;
+};
+
 // Local enricher to append sorting metrics to fallback model results
 const enrichResultLocally = (row: any, postcodeDb: PostcodeEntry[]): MigrationResult => {
   const match = postcodeDb.find(e => 
@@ -1276,67 +1374,28 @@ ON CONFLICT (email) DO NOTHING;`;
                 }
               });
 
-              // Clean & normalize matches helper
-              const normalizeStr = (str: string) => {
-                if (!str) return "";
-                return str
-                  .toLowerCase()
-                  .replace(/\b(province|capital|khan|sangkat|sangkat\b|krong|district|khan\b|municipality|phum|commune|capital city)\b/gi, "")
-                  .replace(/[‘’'"`]/g, "")
-                  .replace(/[^a-z0-9]/gi, "")
-                  .trim();
-              };
+              const matchedGeocoded = fuzzyMatchGeocodedAddress(
+                gProvince,
+                gDistrict,
+                gCommune,
+                currentPostcodes,
+                `Map Geocoded Contact Location: "${firstResult.formatted_address}"`
+              );
 
-              const findClosestLine = () => {
-                const normProv = normalizeStr(gProvince);
-                const normDist = normalizeStr(gDistrict);
-                const normComm = normalizeStr(gCommune);
+              if (matchedGeocoded) {
+                // Find matching Entry object to populate in selectedNearestEntry State
+                const matchedEntry = currentPostcodes.find(e => 
+                  e.province === matchedGeocoded.province &&
+                  e.district === matchedGeocoded.district &&
+                  e.commune === matchedGeocoded.commune
+                ) || null;
 
-                if (!normProv) return null;
-
-                const provMatches = currentPostcodes.filter(e => {
-                  const eProv = normalizeStr(e.province);
-                  return eProv === normProv || eProv.includes(normProv) || normProv.includes(eProv);
-                });
-                if (provMatches.length === 0) return null;
-
-                let distMatches = provMatches;
-                if (normDist) {
-                  const directDist = provMatches.filter(e => {
-                    const eDist = normalizeStr(e.district);
-                    return eDist === normDist || eDist.includes(normDist) || normDist.includes(eDist);
-                  });
-                  if (directDist.length > 0) {
-                    distMatches = directDist;
-                  }
-                }
-
-                if (normComm) {
-                  const commMatches = distMatches.filter(e => {
-                    const eComm = normalizeStr(e.commune);
-                    return eComm === normComm || eComm.includes(normComm) || normComm.includes(eComm);
-                  });
-                  if (commMatches.length > 0) {
-                    return commMatches[0];
-                  }
-                }
-                return distMatches[0] || null;
-              };
-
-              const matchedLocal = findClosestLine();
-              if (matchedLocal) {
-                setSelectedNearestEntry(matchedLocal);
+                setSelectedNearestEntry(matchedEntry);
                 setSingleResult({
-                  province: matchedLocal.province,
-                  district: matchedLocal.district,
-                  commune: matchedLocal.commune,
-                  postcode_status: "Follow New Postcode",
-                  existing_postcode: matchedLocal.existing_postcode,
-                  new_postcode: matchedLocal.new_postcode,
-                  new_city_name: matchedLocal.new_city_name,
-                  ib_sort_co: matchedLocal.ib_sort_co || "",
-                  inbound_fac: matchedLocal.inbound_fac || "",
-                  input_text: `Google Geocoded Address: "${firstResult.formatted_address}"`
+                  ...matchedGeocoded,
+                  // In map-pointing, since user has no typed text containing postcodes,
+                  // let's follow the standard convention "Follow New Postcode" or "No Postcode Detected":
+                  postcode_status: "Follow New Postcode"
                 });
                 return;
               }
@@ -2143,7 +2202,54 @@ ON CONFLICT (email) DO NOTHING;`;
       setTimeout(() => setSuccessMessage(null), 3500);
     } catch (err: any) {
       console.warn("Express endpoint unavailable or failed. Running client-side high-fidelity fallback...", err);
-      // Client-side fallback routine
+      
+      // Client-side Google Geocode + Fuzzy DB match fallback
+      const clientGoogleKey = apiConnections.googleMapsKey;
+      if (clientGoogleKey && !clientGoogleKey.includes("••••") && clientGoogleKey.trim().length > 10) {
+        try {
+          const geoRes = await fetch(`https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(text)}&key=${clientGoogleKey}`);
+          if (geoRes.ok) {
+            const geoData = await geoRes.json();
+            if (geoData.status === "OK" && geoData.results && geoData.results[0]) {
+              const firstResult = geoData.results[0];
+              let gProvince = "";
+              let gDistrict = "";
+              let gCommune = "";
+
+              firstResult.address_components.forEach((comp: any) => {
+                const types = comp.types || [];
+                if (types.includes("administrative_area_level_1")) {
+                  gProvince = comp.long_name;
+                } else if (types.includes("administrative_area_level_2") || types.includes("locality")) {
+                  gDistrict = comp.long_name;
+                } else if (types.includes("sublocality_level_1") || types.includes("sublocality") || types.includes("neighborhood") || types.includes("administrative_area_level_3")) {
+                  gCommune = comp.long_name;
+                }
+              });
+
+              const matchedGeocoded = fuzzyMatchGeocodedAddress(gProvince, gDistrict, gCommune, postcodes, text);
+              if (matchedGeocoded) {
+                const searchId = await logSearchClientSide(text, matchedGeocoded, matchedGeocoded.score);
+                setSingleResult({
+                  ...matchedGeocoded,
+                  search_id: searchId || "local_sh_" + Date.now(),
+                  confidence_score: matchedGeocoded.score,
+                  benchmark_used: 12,
+                  cached: false,
+                  input_text: `Google Geocoding Fuzzy Match: "${firstResult.formatted_address}"`
+                });
+                setSuccessMessage("Address geocoded and fuzzy matched successfully via Google Places!");
+                setTimeout(() => setSuccessMessage(null), 3500);
+                return;
+              }
+            }
+          }
+        } catch (geoErr) {
+          console.warn("Client-side direct Google Geocoding match fallback failed:", geoErr);
+        }
+      }
+
+      // Client-side fallback routine with direct Gemini
       const clientGeminiKey = apiConnections.geminiKey;
       const clientModel = apiConnections.geminiVersion || "gemini-3.5-flash";
       
@@ -2232,6 +2338,85 @@ ON CONFLICT (email) DO NOTHING;`;
       setTimeout(() => setSuccessMessage(null), 4000);
     } catch (err: any) {
       console.warn("Express bulk endpoint unavailable or failed. Running client-side bulk fallback...", err);
+      
+      // Client-side Google Geocode + Fuzzy DB match fallback for each row in bulk
+      const clientGoogleKey = apiConnections.googleMapsKey;
+      let googleResolvedRows: any[] | null = null;
+      if (clientGoogleKey && !clientGoogleKey.includes("••••") && clientGoogleKey.trim().length > 10) {
+        try {
+          const resolvedPromises = rowsArray.map(async (rowText, idx) => {
+            try {
+              const geoRes = await fetch(`https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(rowText)}&key=${clientGoogleKey}`);
+              if (geoRes.ok) {
+                const geoData = await geoRes.json();
+                if (geoData.status === "OK" && geoData.results && geoData.results[0]) {
+                  const firstResult = geoData.results[0];
+                  let gProvince = "";
+                  let gDistrict = "";
+                  let gCommune = "";
+
+                  firstResult.address_components.forEach((comp: any) => {
+                    const types = comp.types || [];
+                    if (types.includes("administrative_area_level_1")) {
+                      gProvince = comp.long_name;
+                    } else if (types.includes("administrative_area_level_2") || types.includes("locality")) {
+                      gDistrict = comp.long_name;
+                    } else if (types.includes("sublocality_level_1") || types.includes("sublocality") || types.includes("neighborhood") || types.includes("administrative_area_level_3")) {
+                      gCommune = comp.long_name;
+                    }
+                  });
+
+                  const matchedGeocoded = fuzzyMatchGeocodedAddress(gProvince, gDistrict, gCommune, postcodes, rowText);
+                  if (matchedGeocoded) {
+                    const searchId = await logSearchClientSide(rowText, matchedGeocoded, matchedGeocoded.score);
+                    return {
+                      ...matchedGeocoded,
+                      search_id: searchId || "local_sh_" + Date.now() + "_" + idx,
+                      confidence_score: matchedGeocoded.score,
+                      benchmark_used: 12,
+                      cached: false,
+                      input_text: `Google Geocoding Fuzzy Match: "${firstResult.formatted_address}"`
+                    };
+                  }
+                }
+              }
+            } catch (singleGeoErr) {
+              console.warn(`Row ${idx} Google Geocoding fallback failed:`, singleGeoErr);
+            }
+            return null; // fallback will process this row
+          });
+
+          const resolved = await Promise.all(resolvedPromises);
+          if (resolved.some(r => r !== null)) {
+            googleResolvedRows = resolved;
+          }
+        } catch (geoErr) {
+          console.warn("Client-side bulk Google Geocoding fallback failed entirely:", geoErr);
+        }
+      }
+
+      if (googleResolvedRows) {
+        const finalResults = await Promise.all(googleResolvedRows.map(async (row, idx) => {
+          if (row !== null) return row;
+          // Run standard Local Postcode Match fallback for unmatched rows
+          const inputText = rowsArray[idx] || "";
+          const localResult = localPostcodeMatch(inputText, postcodes);
+          const searchId = await logSearchClientSide(inputText, localResult, 95);
+          return {
+            ...localResult,
+            search_id: searchId || "local_sh_" + Date.now() + "_" + idx,
+            confidence_score: 95,
+            benchmark_used: 12,
+            cached: false
+          };
+        }));
+
+        setBulkResults(finalResults);
+        setSuccessMessage(`Proceeded bulk conversion of ${finalResults.length} rows using Google Geocoding + Local DB matches!`);
+        setTimeout(() => setSuccessMessage(null), 4000);
+        return;
+      }
+
       const clientGeminiKey = apiConnections.geminiKey;
       const clientModel = apiConnections.geminiVersion || "gemini-3.5-flash";
 
