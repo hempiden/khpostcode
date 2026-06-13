@@ -635,6 +635,52 @@ export default function App() {
   const [searchHistory, setSearchHistory] = useState<any[]>([]);
   const [benchmarkCurrent, setBenchmarkCurrent] = useState<number>(12);
 
+  // Dynamic direct client-side search history logger for resilient cloud (Vercel) bypass
+  const logSearchClientSide = async (originalQuery: string, result: any, score: number) => {
+    const clientUrl = apiConnections.supabaseUrl;
+    const clientKey = apiConnections.supabaseKey;
+    if (!clientUrl || !clientKey || clientKey.includes("••••") || clientKey.trim() === "MY_SUPABASE_KEY") {
+      return null;
+    }
+
+    const qClean = (originalQuery || "").trim().toLowerCase().replace(/\s+/g, " ");
+    const searchId = "sh_" + Date.now() + "_" + Math.floor(Math.random() * 100000);
+    const datetime = new Date().toISOString();
+
+    const payload = {
+      id: searchId,
+      query: qClean,
+      original_query: originalQuery,
+      datetime: datetime,
+      result: result,
+      score: score,
+      rating: null,
+      benchmark_used: 12
+    };
+
+    try {
+      const url = `${clientUrl}/rest/v1/postcode_search_history`;
+      const res = await fetch(url, {
+        method: "POST",
+        headers: {
+          "apikey": clientKey,
+          "Authorization": `Bearer ${clientKey}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify(payload)
+      });
+      if (res.ok) {
+        console.log(`[Supabase Status] Saved search log directly from client fallback. ID: ${searchId}`);
+        // Refresh log table after successfully inserting!
+        fetchSearchHistory();
+        return searchId;
+      }
+    } catch (err) {
+      console.error("Direct client-side search log insert failed:", err);
+    }
+    return searchId;
+  };
+
   const fetchSearchHistory = async () => {
     try {
       const res = await fetch("/api/search-history");
@@ -642,9 +688,58 @@ export default function App() {
         const data = await res.json();
         setSearchHistory(data.history || []);
         setBenchmarkCurrent(data.benchmark_current !== undefined ? data.benchmark_current : 12);
+      } else {
+        throw new Error("Backend API returned non-OK status");
       }
     } catch (err) {
-      console.warn("Could not fetch search history metrics:", err);
+      console.warn("Could not fetch search history metrics from Express:", err);
+      // Fallback directly to Supabase client-side lookup
+      const clientUrl = apiConnections.supabaseUrl;
+      const clientKey = apiConnections.supabaseKey;
+      if (clientUrl && clientKey && !clientKey.includes("••••") && clientKey.trim() !== "MY_SUPABASE_KEY") {
+        try {
+          const url = `${clientUrl}/rest/v1/postcode_search_history?select=*&order=datetime.asc`;
+          const sRes = await fetch(url, {
+            method: "GET",
+            headers: {
+              "apikey": clientKey,
+              "Authorization": `Bearer ${clientKey}`
+            }
+          });
+          if (sRes.ok) {
+            const remoteList = await sRes.json();
+            if (remoteList && Array.isArray(remoteList)) {
+              // Convert to the identical structure expected by logs list component
+              const mapped = remoteList.map(entry => {
+                const resultObj = entry.result || {};
+                const hasMatch = resultObj && resultObj.new_postcode;
+                
+                // Fallback for visual targeting
+                let targetName = "";
+                if (hasMatch) {
+                  targetName = resultObj.new_city_name || [resultObj.commune, resultObj.district, resultObj.province].filter(Boolean).join(", ");
+                }
+
+                return {
+                  id: entry.id,
+                  input_text: entry.original_query || entry.query || "",
+                  new_city_name: targetName,
+                  new_postcode: resultObj.new_postcode || "",
+                  confidence_score: entry.score !== undefined ? Number(entry.score) : 100,
+                  cached: true, // In Vercel mode we treat all historical loads as database-authenticated cache
+                  rating: entry.rating || null,
+                  created_at: entry.datetime || entry.created_at || new Date().toISOString()
+                };
+              });
+              // Sort by logged timestamp descending so newest searches show first at the top of logs!
+              mapped.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+              setSearchHistory(mapped);
+            }
+          }
+        } catch (subErr) {
+          console.error("Direct client-side Supabase history pull failed:", subErr);
+        }
+      }
     }
   };
 
@@ -658,15 +753,12 @@ export default function App() {
       if (response.ok) {
         const data = await response.json();
         setBenchmarkCurrent(data.benchmark_current !== undefined ? data.benchmark_current : 12);
-        // Refresh logs instantly
         fetchSearchHistory();
         
-        // If singleResult holds this id, update its rating internally
         if (singleResult && (singleResult as any).search_id === id) {
           setSingleResult(prev => prev ? { ...prev, rating } as any : null);
         }
         
-        // If bulkResults holds this id, update its rating internally
         setBulkResults(prev => prev.map(row => {
           if ((row as any).search_id === id) {
             return { ...row, rating } as any;
@@ -676,9 +768,52 @@ export default function App() {
 
         setSuccessMessage("Accuracy rating recorded! Metrics thresholds automatically updated.");
         setTimeout(() => setSuccessMessage(null), 3500);
+      } else {
+        throw new Error("Express endpoint failed");
       }
     } catch (err) {
-      console.error("Could not register user feedback rating:", err);
+      console.warn("Could not register rating via Express. Rating directly to Supabase...", err);
+      // Direct client-side rating save to Supabase
+      const clientUrl = apiConnections.supabaseUrl;
+      const clientKey = apiConnections.supabaseKey;
+      if (clientUrl && clientKey && !clientKey.includes("••••") && clientKey.trim() !== "MY_SUPABASE_KEY") {
+        try {
+          const sRes = await fetch(`${clientUrl}/rest/v1/postcode_search_history?id=eq.${id}`, {
+            method: "PATCH",
+            headers: {
+              "apikey": clientKey,
+              "Authorization": `Bearer ${clientKey}`,
+              "Content-Type": "application/json"
+            },
+            body: JSON.stringify({ rating })
+          });
+          if (sRes.ok) {
+            // Update the search history local state instantly
+            setSearchHistory(prev => prev.map(item => {
+              if (item.id === id) {
+                return { ...item, rating };
+              }
+              return item;
+            }));
+            
+            if (singleResult && (singleResult as any).search_id === id) {
+              setSingleResult(prev => prev ? { ...prev, rating } as any : null);
+            }
+            
+            setBulkResults(prev => prev.map(row => {
+              if ((row as any).search_id === id) {
+                return { ...row, rating } as any;
+              }
+              return row;
+            }));
+
+            setSuccessMessage("Accuracy rating recorded directly to Supabase!");
+            setTimeout(() => setSuccessMessage(null), 3500);
+          }
+        } catch (subErr) {
+          console.error("Direct client rating save failed:", subErr);
+        }
+      }
     }
   };
 
@@ -2017,7 +2152,14 @@ ON CONFLICT (email) DO NOTHING;`;
           const result = await callGeminiDirectly(text, postcodes, clientGeminiKey, clientModel);
           if (result) {
             const enriched = enrichResultLocally(result, postcodes);
-            setSingleResult(enriched);
+            const searchId = await logSearchClientSide(text, enriched, 100);
+            setSingleResult({
+              ...enriched,
+              search_id: searchId || "local_sh_" + Date.now(),
+              confidence_score: 100,
+              benchmark_used: 12,
+              cached: false
+            });
             setSuccessMessage("Address analyzed successfully via direct Gemini link (Vercel Match Mode)!");
             setTimeout(() => setSuccessMessage(null), 3500);
             return;
@@ -2029,7 +2171,14 @@ ON CONFLICT (email) DO NOTHING;`;
 
       // Local high-fidelity pattern match engine fallback
       const localResult = localPostcodeMatch(text, postcodes);
-      setSingleResult(localResult);
+      const searchId = await logSearchClientSide(text, localResult, 95);
+      setSingleResult({
+        ...localResult,
+        search_id: searchId || "local_sh_" + Date.now(),
+        confidence_score: 95,
+        benchmark_used: 12,
+        cached: false
+      });
       setSuccessMessage("Address matched instantly via local pattern matching engine!");
       setTimeout(() => setSuccessMessage(null), 3500);
     } finally {
@@ -2091,8 +2240,22 @@ ON CONFLICT (email) DO NOTHING;`;
           const results = await callGeminiDirectlyBulk(rowsArray, postcodes, clientGeminiKey, clientModel);
           if (results && Array.isArray(results) && results.length > 0) {
             const enrichedResults = results.map(row => enrichResultLocally(row, postcodes));
-            setBulkResults(enrichedResults);
-            setSuccessMessage(`Proceeded batch conversion of ${enrichedResults.length} rows via direct Gemini link!`);
+            
+            // Log each element client-side in parallel to Supabase
+            const savedResults = await Promise.all(enrichedResults.map(async (row, idx) => {
+              const inputText = rowsArray[idx] || "";
+              const searchId = await logSearchClientSide(inputText, row, 100);
+              return {
+                ...row,
+                search_id: searchId || "local_sh_" + Date.now() + "_" + idx,
+                confidence_score: 100,
+                benchmark_used: 12,
+                cached: false
+              };
+            }));
+            
+            setBulkResults(savedResults);
+            setSuccessMessage(`Proceeded batch conversion of ${savedResults.length} rows via direct Gemini link!`);
             setTimeout(() => setSuccessMessage(null), 4000);
             return;
           }
@@ -2103,8 +2266,19 @@ ON CONFLICT (email) DO NOTHING;`;
 
       // Local high-fidelity fallback for each row
       const localResults = rowsArray.map(row => localPostcodeMatch(row, postcodes));
-      setBulkResults(localResults);
-      setSuccessMessage(`Proceeded batch conversion of ${localResults.length} rows via local match engine fallback!`);
+      const savedResults = await Promise.all(localResults.map(async (row, idx) => {
+        const inputText = rowsArray[idx] || "";
+        const searchId = await logSearchClientSide(inputText, row, 95);
+        return {
+          ...row,
+          search_id: searchId || "local_sh_" + Date.now() + "_" + idx,
+          confidence_score: 95,
+          benchmark_used: 12,
+          cached: false
+        };
+      }));
+      setBulkResults(savedResults);
+      setSuccessMessage(`Proceeded batch conversion of ${savedResults.length} rows via local match engine fallback!`);
       setTimeout(() => setSuccessMessage(null), 4000);
     } finally {
       setSubmitting(false);

@@ -384,7 +384,7 @@ function getSupabaseCredentials() {
                     process.env.NEXT_PUBLIC_SUPABASE_SUPABASE_SECRET_KEY;
                     
   if (secretKey && secretKey.trim() !== "") {
-    return { url: sanitizeSupabaseUrl(url), key: secretKey.trim(), table: sanitizeSupabaseTable(table) };
+    return { url: sanitizeSupabaseUrl(url), key: sanitizeSupabaseKey(secretKey), table: sanitizeSupabaseTable(table) };
   }
   
   const envKey = process.env.SUPABASE_SECRET_KEY || 
@@ -400,7 +400,7 @@ function getSupabaseCredentials() {
                  process.env.VITE_SUPABASE_KEY;
                  
   if (envKey && envKey.trim() !== "" && envKey !== "MY_SUPABASE_KEY") {
-    return { url: sanitizeSupabaseUrl(url), key: envKey.trim(), table: sanitizeSupabaseTable(table) };
+    return { url: sanitizeSupabaseUrl(url), key: sanitizeSupabaseKey(envKey), table: sanitizeSupabaseTable(table) };
   }
   
   return { url: sanitizeSupabaseUrl(url), key: initialConfig.supabaseKey || "", table: sanitizeSupabaseTable(table) };
@@ -2504,6 +2504,9 @@ app.post("/api/migrate", async (req, res) => {
   if (!text && (!rows || !Array.isArray(rows) || rows.length === 0)) {
     return res.status(400).json({ error: "Please provide 'text' (single) or 'rows' (bulk array) to process." });
   }
+
+  // Ensure newest history logs and ratings are synced from Supabase before matching
+  await loadSearchHistory();
 
   // Check if Gemini API key exists
   const apiKey = process.env.GEMINI_API_KEY;
