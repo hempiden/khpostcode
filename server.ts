@@ -644,7 +644,7 @@ async function loadSearchHistory() {
               result: r.result,
               score: Number(r.score) !== undefined && !isNaN(Number(r.score)) ? Number(r.score) : 100,
               rating: r.rating || null,
-              benchmark_used: Number(r.benchmark_used) !== undefined && !isNaN(Number(r.benchmark_used)) ? Number(r.benchmark_used) : 12
+              benchmark_used: Number(r.benchmark_used) !== undefined && !isNaN(Number(r.benchmark_used)) ? Number(r.benchmark_used) : 50
             });
           });
           searchHistoryCache = Array.from(mergedMap.values()).sort(
@@ -672,7 +672,7 @@ async function loadSearchHistory() {
 
 // Dynamic benchmark threshold calculator based on feedback ratings
 function getDynamicCutoffThreshold(): number {
-  let threshold = 12; // Start with default baseline
+  let threshold = 50; // Start with default baseline
   
   // Filter for completed thumbs-down ratings (inaccurate matching results)
   const thumbsDownScores = searchHistoryCache
@@ -681,8 +681,8 @@ function getDynamicCutoffThreshold(): number {
     
   if (thumbsDownScores.length > 0) {
     const maxFailed = Math.max(...thumbsDownScores);
-    // If users rejected a match with score 14, threshold adapts to 15 (maxFailed + 1)
-    threshold = Math.min(30, Math.max(threshold, maxFailed + 1));
+    // If users rejected a match with score 54, threshold adapts to 55 (maxFailed + 1)
+    threshold = Math.min(80, Math.max(threshold, maxFailed + 1));
   }
   
   // Also see if we have successful matches without negative ones to lower threshold
@@ -692,8 +692,8 @@ function getDynamicCutoffThreshold(): number {
     
   if (thumbsDownScores.length === 0 && thumbsUpScores.length >= 3) {
     const minSuccess = Math.min(...thumbsUpScores);
-    // Minimum floor 8
-    threshold = Math.max(8, Math.min(threshold, minSuccess));
+    // Minimum floor 50
+    threshold = Math.max(50, Math.min(threshold, minSuccess));
   }
   
   return threshold;
@@ -1052,7 +1052,9 @@ function normalizedFuzzyMatch(inputText: string, db: PostcodeEntry[]): any {
     "prampir meakkara": ["7 makara", "7makara", "prampir makara", "prampir meakkara", "7_makara", "7-makara"],
     "tuol kouk": ["toul kouk", "toulkouk", "tuol kouk", "tual kouk", "tuolkouk"],
     "phnom penh": ["pp", "phnompenh", "phnom penh", "phnom, penh"],
-    "doun penh": ["daun penh", "doun penh", "daunpenh", "dounpenh"]
+    "doun penh": ["daun penh", "doun penh", "daunpenh", "dounpenh"],
+    "saen sokh": ["sen sok", "sensok", "saen sok", "saensok", "sean sok", "seansok", "saen sokh", "saensokh"],
+    "phnum penh thmei": ["phnom penh thmey", "phnum penh thmey", "phnom penh thmei", "phnum penh thmei", "phnompenhthmey", "phnumpenhthmey"]
   };
 
   let substitutedInput = cleanInput;
@@ -1183,7 +1185,9 @@ function localPostcodeMatch(inputText: string, db: PostcodeEntry[], cutoffOverri
     "prampir meakkara": ["7 makara", "7makara", "prampir makara", "prampir meakkara", "7_makara", "7-makara"],
     "tuol kouk": ["toul kouk", "toulkouk", "tuol kouk", "tual kouk", "tuolkouk"],
     "phnom penh": ["pp", "phnompenh", "phnom penh", "phnom, penh"],
-    "doun penh": ["daun penh", "doun penh", "daunpenh", "dounpenh"]
+    "doun penh": ["daun penh", "doun penh", "daunpenh", "dounpenh"],
+    "saen sokh": ["sen sok", "sensok", "saen sok", "saensok", "sean sok", "seansok", "saen sokh", "saensokh"],
+    "phnum penh thmei": ["phnom penh thmey", "phnum penh thmey", "phnom penh thmei", "phnum penh thmei", "phnompenhthmey", "phnumpenhthmey"]
   };
 
   let substitutedInput = cleanInput;
@@ -1212,9 +1216,14 @@ function localPostcodeMatch(inputText: string, db: PostcodeEntry[], cutoffOverri
     const normDWords = dWords.map(normalizeWord);
     const normCWords = cWords.map(normalizeWord);
 
+    let matchedProvince = false;
+    let matchedDistrict = false;
+    let matchedCommune = false;
+
     // 1. Contiguous word boundary sequence matching (Very high priority)
     if (normCWords.length > 0 && isContiguousMatch(normCWords, normalizedInputWords)) {
       score += 45;
+      matchedCommune = true;
     } else {
       // Fuzzy word overlaps for commune
       if (normCWords.length > 0) {
@@ -1225,13 +1234,20 @@ function localPostcodeMatch(inputText: string, db: PostcodeEntry[], cutoffOverri
           }
         }
         const ratio = matched / normCWords.length;
-        if (ratio === 1.0) score += 35;
-        else if (ratio >= 0.5) score += ratio * 25;
+        if (ratio === 1.0) {
+          score += 35;
+          matchedCommune = true;
+        }
+        else if (ratio >= 0.5) {
+          score += ratio * 25;
+          matchedCommune = true;
+        }
       }
     }
 
     if (normDWords.length > 0 && isContiguousMatch(normDWords, normalizedInputWords)) {
       score += 25;
+      matchedDistrict = true;
     } else {
       // Fuzzy word overlaps for district
       if (normDWords.length > 0) {
@@ -1242,13 +1258,20 @@ function localPostcodeMatch(inputText: string, db: PostcodeEntry[], cutoffOverri
           }
         }
         const ratio = matched / normDWords.length;
-        if (ratio === 1.0) score += 20;
-        else if (ratio >= 0.5) score += ratio * 15;
+        if (ratio === 1.0) {
+          score += 20;
+          matchedDistrict = true;
+        }
+        else if (ratio >= 0.5) {
+          score += ratio * 15;
+          matchedDistrict = true;
+        }
       }
     }
 
     if (normPWords.length > 0 && isContiguousMatch(normPWords, normalizedInputWords)) {
       score += 15;
+      matchedProvince = true;
     } else {
       // Fuzzy word overlaps for province
       if (normPWords.length > 0) {
@@ -1259,9 +1282,26 @@ function localPostcodeMatch(inputText: string, db: PostcodeEntry[], cutoffOverri
           }
         }
         const ratio = matched / normPWords.length;
-        if (ratio === 1.0) score += 10;
-        else if (ratio >= 0.5) score += ratio * 5;
+        if (ratio === 1.0) {
+          score += 10;
+          matchedProvince = true;
+        }
+        else if (ratio >= 0.5) {
+          score += ratio * 5;
+          matchedProvince = true;
+        }
       }
+    }
+
+    // High confidence Combo Bonuses if multiple levels are matched
+    if (matchedProvince && matchedDistrict && matchedCommune) {
+      score += 25;
+    } else if (matchedDistrict && matchedCommune) {
+      score += 20;
+    } else if (matchedProvince && matchedDistrict) {
+      score += 15;
+    } else if (matchedProvince && matchedCommune) {
+      score += 15;
     }
 
     // Penalize matches with absolutely zero commune overlap if commune is present in database
@@ -1272,13 +1312,16 @@ function localPostcodeMatch(inputText: string, db: PostcodeEntry[], cutoffOverri
       score -= 15;
     }
 
+    // Cap at 100
+    score = Math.min(100, score);
+
     if (score > bestScore) {
       bestScore = score;
       bestEntry = item;
     }
   }
 
-  const activeCutoff = cutoffOverride !== undefined ? cutoffOverride : 10;
+  const activeCutoff = cutoffOverride !== undefined ? cutoffOverride : 50;
 
   // We require a minimum confidence threshold to prevent completely random matching
   if (!bestEntry || bestScore < activeCutoff) {

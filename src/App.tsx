@@ -67,6 +67,7 @@ interface MigrationResult {
   ib_sort_co?: string;
   inbound_fac?: string;
   new_city_name?: string;
+  score?: number;
 }
 
 export interface RoleFeatures {
@@ -174,7 +175,9 @@ const localPostcodeMatch = (inputText: string, db: PostcodeEntry[]): MigrationRe
     "prampir meakkara": ["7 makara", "7makara", "prampir makara", "prampir meakkara", "7_makara", "7-makara"],
     "tuol kouk": ["toul kouk", "toulkouk", "tuol kouk", "tual kouk", "tuolkouk"],
     "phnom penh": ["pp", "phnompenh", "phnom penh", "phnom, penh"],
-    "doun penh": ["daun penh", "doun penh", "daunpenh", "dounpenh"]
+    "doun penh": ["daun penh", "doun penh", "daunpenh", "dounpenh"],
+    "saen sokh": ["sen sok", "sensok", "saen sok", "saensok", "sean sok", "seansok", "saen sokh", "saensokh"],
+    "phnum penh thmei": ["phnom penh thmey", "phnum penh thmey", "phnom penh thmei", "phnum penh thmei", "phnompenhthmey", "phnumpenhthmey"]
   };
 
   let substitutedInput = cleanInput;
@@ -195,27 +198,57 @@ const localPostcodeMatch = (inputText: string, db: PostcodeEntry[]): MigrationRe
     const d = (item.district || "").toLowerCase();
     const c = (item.commune || "").toLowerCase();
 
+    let matchedProvince = false;
+    let matchedDistrict = false;
+    let matchedCommune = false;
+
     // Check direct commune substring match which is very strong
     if (c && substitutedInput.includes(c)) {
       score += 25;
+      matchedCommune = true;
     }
     // Check district matching
     if (d && substitutedInput.includes(d)) {
       score += 15;
+      matchedDistrict = true;
     }
     // Check province matching
     if (p && substitutedInput.includes(p)) {
       score += 5;
+      matchedProvince = true;
     }
 
     // Checking word overlap
     const words = substitutedInput.split(/[\s,.\-\/]+/);
     for (const w of words) {
       if (w.length < 3) continue;
-      if (c && c.includes(w)) score += 5;
-      if (d && d.includes(w)) score += 3;
-      if (p && p.includes(w)) score += 1;
+      if (c && c.includes(w)) {
+        score += 5;
+        matchedCommune = true;
+      }
+      if (d && d.includes(w)) {
+        score += 3;
+        matchedDistrict = true;
+      }
+      if (p && p.includes(w)) {
+        score += 1;
+        matchedProvince = true;
+      }
     }
+
+    // High confidence Combo Bonuses if multiple levels are matched
+    if (matchedProvince && matchedDistrict && matchedCommune) {
+      score += 25;
+    } else if (matchedDistrict && matchedCommune) {
+      score += 20;
+    } else if (matchedProvince && matchedDistrict) {
+      score += 15;
+    } else if (matchedProvince && matchedCommune) {
+      score += 15;
+    }
+
+    // Cap the maximum score at 100
+    score = Math.min(100, score);
 
     if (score > bestScore) {
       bestScore = score;
@@ -223,7 +256,7 @@ const localPostcodeMatch = (inputText: string, db: PostcodeEntry[]): MigrationRe
     }
   }
 
-  if (!bestEntry || bestScore < 6) {
+  if (!bestEntry || bestScore < 50) {
     return {
       province: "Unknown",
       district: "Unknown",
@@ -231,6 +264,7 @@ const localPostcodeMatch = (inputText: string, db: PostcodeEntry[]): MigrationRe
       postcode_status: "Unknown",
       existing_postcode: "",
       new_postcode: "",
+      score: bestScore,
       input_text: inputText
     };
   }
@@ -260,6 +294,7 @@ const localPostcodeMatch = (inputText: string, db: PostcodeEntry[]): MigrationRe
     ib_sort_co: bestEntry.ib_sort_co || "",
     inbound_fac: bestEntry.inbound_fac || "",
     new_city_name: bestEntry.new_city_name || "",
+    score: bestScore,
     input_text: inputText
   };
 };
@@ -731,7 +766,7 @@ export default function App() {
 
   // Token cache search logs and dynamic scoring state registry
   const [searchHistory, setSearchHistory] = useState<any[]>([]);
-  const [benchmarkCurrent, setBenchmarkCurrent] = useState<number>(12);
+  const [benchmarkCurrent, setBenchmarkCurrent] = useState<number>(50);
 
   // Dynamic direct client-side search history logger for resilient cloud (Vercel) bypass
   const logSearchClientSide = async (originalQuery: string, result: any, score: number) => {
@@ -753,7 +788,7 @@ export default function App() {
       result: result,
       score: score,
       rating: null,
-      benchmark_used: 12
+      benchmark_used: 50
     };
 
     try {
@@ -785,7 +820,7 @@ export default function App() {
       if (res.ok) {
         const data = await res.json();
         setSearchHistory(data.history || []);
-        setBenchmarkCurrent(data.benchmark_current !== undefined ? data.benchmark_current : 12);
+        setBenchmarkCurrent(data.benchmark_current !== undefined ? data.benchmark_current : 50);
       } else {
         throw new Error("Backend API returned non-OK status");
       }
@@ -850,7 +885,7 @@ export default function App() {
       });
       if (response.ok) {
         const data = await response.json();
-        setBenchmarkCurrent(data.benchmark_current !== undefined ? data.benchmark_current : 12);
+        setBenchmarkCurrent(data.benchmark_current !== undefined ? data.benchmark_current : 50);
         fetchSearchHistory();
         
         if (singleResult && (singleResult as any).search_id === id) {
@@ -2234,7 +2269,7 @@ ON CONFLICT (email) DO NOTHING;`;
                   ...matchedGeocoded,
                   search_id: searchId || "local_sh_" + Date.now(),
                   confidence_score: matchedGeocoded.score,
-                  benchmark_used: 12,
+                  benchmark_used: 50,
                   cached: false,
                   input_text: `Google Geocoding Fuzzy Match: "${firstResult.formatted_address}"`
                 });
@@ -2263,7 +2298,7 @@ ON CONFLICT (email) DO NOTHING;`;
               ...enriched,
               search_id: searchId || "local_sh_" + Date.now(),
               confidence_score: 100,
-              benchmark_used: 12,
+              benchmark_used: 50,
               cached: false
             });
             setSuccessMessage("Address analyzed successfully via direct Gemini link (Vercel Match Mode)!");
@@ -2277,12 +2312,13 @@ ON CONFLICT (email) DO NOTHING;`;
 
       // Local high-fidelity pattern match engine fallback
       const localResult = localPostcodeMatch(text, postcodes);
-      const searchId = await logSearchClientSide(text, localResult, 95);
+      const scoreToUse = localResult.score !== undefined ? localResult.score : 95;
+      const searchId = await logSearchClientSide(text, localResult, scoreToUse);
       setSingleResult({
         ...localResult,
         search_id: searchId || "local_sh_" + Date.now(),
-        confidence_score: 95,
-        benchmark_used: 12,
+        confidence_score: scoreToUse,
+        benchmark_used: 50,
         cached: false
       });
       setSuccessMessage("Address matched instantly via local pattern matching engine!");
@@ -2373,7 +2409,7 @@ ON CONFLICT (email) DO NOTHING;`;
                       ...matchedGeocoded,
                       search_id: searchId || "local_sh_" + Date.now() + "_" + idx,
                       confidence_score: matchedGeocoded.score,
-                      benchmark_used: 12,
+                      benchmark_used: 50,
                       cached: false,
                       input_text: `Google Geocoding Fuzzy Match: "${firstResult.formatted_address}"`
                     };
@@ -2401,12 +2437,13 @@ ON CONFLICT (email) DO NOTHING;`;
           // Run standard Local Postcode Match fallback for unmatched rows
           const inputText = rowsArray[idx] || "";
           const localResult = localPostcodeMatch(inputText, postcodes);
-          const searchId = await logSearchClientSide(inputText, localResult, 95);
+          const scoreToUse = localResult.score !== undefined ? localResult.score : 95;
+          const searchId = await logSearchClientSide(inputText, localResult, scoreToUse);
           return {
             ...localResult,
             search_id: searchId || "local_sh_" + Date.now() + "_" + idx,
-            confidence_score: 95,
-            benchmark_used: 12,
+            confidence_score: scoreToUse,
+            benchmark_used: 50,
             cached: false
           };
         }));
@@ -2434,7 +2471,7 @@ ON CONFLICT (email) DO NOTHING;`;
                 ...row,
                 search_id: searchId || "local_sh_" + Date.now() + "_" + idx,
                 confidence_score: 100,
-                benchmark_used: 12,
+                benchmark_used: 50,
                 cached: false
               };
             }));
@@ -2453,12 +2490,13 @@ ON CONFLICT (email) DO NOTHING;`;
       const localResults = rowsArray.map(row => localPostcodeMatch(row, postcodes));
       const savedResults = await Promise.all(localResults.map(async (row, idx) => {
         const inputText = rowsArray[idx] || "";
-        const searchId = await logSearchClientSide(inputText, row, 95);
+        const scoreToUse = row.score !== undefined ? row.score : 95;
+        const searchId = await logSearchClientSide(inputText, row, scoreToUse);
         return {
           ...row,
           search_id: searchId || "local_sh_" + Date.now() + "_" + idx,
-          confidence_score: 95,
-          benchmark_used: 12,
+          confidence_score: scoreToUse,
+          benchmark_used: 50,
           cached: false
         };
       }));
