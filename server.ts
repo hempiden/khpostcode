@@ -27,9 +27,30 @@ const PORT = 3000;
 app.use(express.json({ limit: "15mb" }));
 app.use(express.urlencoded({ extended: true, limit: "15mb" }));
 
-const dataFilePath = path.join(process.cwd(), "src", "data", "cambodia_postcodes.json");
-const backupFilePath = path.join(process.cwd(), "src", "data", "cambodia_postcodes_backup.json");
-const configFilePath = path.join(process.cwd(), "src", "data", "api_config.json");
+function resolveDataFilePath(filename: string): string {
+  const possiblePaths = [
+    path.join(process.cwd(), "src", "data", filename),
+    path.join(process.cwd(), "data", filename),
+    path.join(__dirname, "src", "data", filename),
+    path.join(__dirname, "..", "src", "data", filename),
+    path.join(__dirname, "data", filename),
+    path.join(__dirname, "..", "data", filename),
+    path.join("/var/task", "src", "data", filename),
+    path.join("/var/task", "data", filename)
+  ];
+  for (const p of possiblePaths) {
+    try {
+      if (fs.existsSync(p)) {
+        return p;
+      }
+    } catch (_) {}
+  }
+  return path.join(process.cwd(), "src", "data", filename);
+}
+
+const dataFilePath = resolveDataFilePath("cambodia_postcodes.json");
+const backupFilePath = resolveDataFilePath("cambodia_postcodes_backup.json");
+const configFilePath = resolveDataFilePath("api_config.json");
 
 // Establish original gold-standard baseline backup at first launch.
 try {
@@ -567,7 +588,7 @@ function isContiguousMatch(subWords: string[], parentWords: string[]): boolean {
   return false;
 }
 
-const searchHistoryFilePath = path.join(process.cwd(), "src", "data", "search_history.json");
+const searchHistoryFilePath = resolveDataFilePath("search_history.json");
 
 interface SearchHistoryEntry {
   id: string;
@@ -583,7 +604,7 @@ interface SearchHistoryEntry {
 let searchHistoryCache: SearchHistoryEntry[] = [];
 
 // Load search history on startup
-function loadSearchHistory() {
+async function loadSearchHistory() {
   try {
     if (fs.existsSync(searchHistoryFilePath)) {
       const raw = fs.readFileSync(searchHistoryFilePath, "utf-8");
@@ -599,53 +620,53 @@ function loadSearchHistory() {
 
   // Synchronize dynamic cache logs with Supabase table in background
   if (isSupabaseConfigured()) {
-    const url = `${SUPABASE_URL}/rest/v1/postcode_search_history?select=*&order=datetime.asc`;
-    fetch(url, {
-      headers: {
-        "apikey": SUPABASE_KEY!,
-        "Authorization": `Bearer ${SUPABASE_KEY}`
-      }
-    })
-    .then(res => {
-      if (res.ok) return res.json();
-      throw new Error(`HTTP status ${res.status}`);
-    })
-    .then(remoteList => {
-      if (remoteList && Array.isArray(remoteList)) {
-        const mergedMap = new Map<string, SearchHistoryEntry>();
-        // Add existing local ones
-        searchHistoryCache.forEach(item => mergedMap.set(item.id, item));
-        // Merge Supabase records
-        remoteList.forEach((r: any) => {
-          mergedMap.set(r.id, {
-            id: r.id,
-            query: r.query,
-            original_query: r.original_query,
-            datetime: r.datetime || r.created_at || new Date().toISOString(),
-            result: r.result,
-            score: Number(r.score) !== undefined && !isNaN(Number(r.score)) ? Number(r.score) : 100,
-            rating: r.rating || null,
-            benchmark_used: Number(r.benchmark_used) !== undefined && !isNaN(Number(r.benchmark_used)) ? Number(r.benchmark_used) : 12
-          });
-        });
-        searchHistoryCache = Array.from(mergedMap.values()).sort(
-          (a, b) => new Date(a.datetime).getTime() - new Date(b.datetime).getTime()
-        );
-        try {
-          const dir = path.dirname(searchHistoryFilePath);
-          if (!fs.existsSync(dir)) {
-            fs.mkdirSync(dir, { recursive: true });
-          }
-          fs.writeFileSync(searchHistoryFilePath, JSON.stringify(searchHistoryCache, null, 2), "utf-8");
-          console.log(`[Status] Synchronized search history cache with Supabase: ${searchHistoryCache.length} entries.`);
-        } catch (writeErr) {
-          console.warn("Could not write merged cache to local drive:", writeErr);
+    try {
+      const url = `${SUPABASE_URL}/rest/v1/postcode_search_history?select=*&order=datetime.asc`;
+      const res = await fetch(url, {
+        headers: {
+          "apikey": SUPABASE_KEY!,
+          "Authorization": `Bearer ${SUPABASE_KEY}`
         }
+      });
+      if (res.ok) {
+        const remoteList = await res.json();
+        if (remoteList && Array.isArray(remoteList)) {
+          const mergedMap = new Map<string, SearchHistoryEntry>();
+          // Add existing local ones
+          searchHistoryCache.forEach(item => mergedMap.set(item.id, item));
+          // Merge Supabase records
+          remoteList.forEach((r: any) => {
+            mergedMap.set(r.id, {
+              id: r.id,
+              query: r.query,
+              original_query: r.original_query,
+              datetime: r.datetime || r.created_at || new Date().toISOString(),
+              result: r.result,
+              score: Number(r.score) !== undefined && !isNaN(Number(r.score)) ? Number(r.score) : 100,
+              rating: r.rating || null,
+              benchmark_used: Number(r.benchmark_used) !== undefined && !isNaN(Number(r.benchmark_used)) ? Number(r.benchmark_used) : 12
+            });
+          });
+          searchHistoryCache = Array.from(mergedMap.values()).sort(
+            (a, b) => new Date(a.datetime).getTime() - new Date(b.datetime).getTime()
+          );
+          try {
+            const dir = path.dirname(searchHistoryFilePath);
+            if (!fs.existsSync(dir)) {
+              fs.mkdirSync(dir, { recursive: true });
+            }
+            fs.writeFileSync(searchHistoryFilePath, JSON.stringify(searchHistoryCache, null, 2), "utf-8");
+            console.log(`[Status] Synchronized search history cache with Supabase: ${searchHistoryCache.length} entries.`);
+          } catch (writeErr) {
+            console.warn("Could not write merged cache to local drive:", writeErr);
+          }
+        }
+      } else {
+        throw new Error(`HTTP status ${res.status}`);
       }
-    })
-    .catch((err) => {
+    } catch (err: any) {
       console.log("[Status] Supabase search history synchronization postponed/offline:", err.message);
-    });
+    }
   }
 }
 
@@ -2092,7 +2113,7 @@ interface AdminUser {
   password?: string;
 }
 
-const usersFilePath = path.join(process.cwd(), "src", "data", "admin_users.json");
+const usersFilePath = resolveDataFilePath("admin_users.json");
 
 // Global server-side in-memory cache for admin users
 let adminUsersMemoryDb: AdminUser[] | null = null;
@@ -2718,6 +2739,12 @@ ${JSON.stringify(aiInputs, null, 2)}`,
 
 // GET /api/search-history - Load all recent search logs for metrics dashboards and feedback listing
 app.get("/api/search-history", async (req, res) => {
+  // Disable HTTP Caching explicitly so that Vercel or cloud proxy/browser layers always serve live metrics
+  res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
+  res.setHeader("Pragma", "no-cache");
+  res.setHeader("Expires", "0");
+  res.setHeader("Surrogate-Control", "no-store");
+
   // Pull freshest logs and ratings from Supabase if configured to ensure full multi-client synchronization
   await loadSearchHistory();
 
