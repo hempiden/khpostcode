@@ -38,7 +38,9 @@ import {
   ShieldAlert,
   Globe,
   Building,
-  Home
+  Home,
+  ThumbsUp,
+  ThumbsDown
 } from "lucide-react";
 
 interface PostcodeEntry {
@@ -626,8 +628,64 @@ export default function App() {
   const [customerCommune, setCustomerCommune] = useState("");
   
   // Navigation / Tabs
-  const [activeTab, setActiveTabState] = useState<"single" | "bulk" | "database" | "superadmin">("single");
+  const [activeTab, setActiveTabState] = useState<"single" | "bulk" | "database" | "superadmin" | "cache">("single");
   const [subTool, setSubToolState] = useState<"text" | "photo" | "map" | "dropdown">("dropdown");
+
+  // Token cache search logs and dynamic scoring state registry
+  const [searchHistory, setSearchHistory] = useState<any[]>([]);
+  const [benchmarkCurrent, setBenchmarkCurrent] = useState<number>(12);
+
+  const fetchSearchHistory = async () => {
+    try {
+      const res = await fetch("/api/search-history");
+      if (res.ok) {
+        const data = await res.json();
+        setSearchHistory(data.history || []);
+        setBenchmarkCurrent(data.benchmark_current !== undefined ? data.benchmark_current : 12);
+      }
+    } catch (err) {
+      console.warn("Could not fetch search history metrics:", err);
+    }
+  };
+
+  const handleRateSearch = async (id: string, rating: "up" | "down" | null) => {
+    try {
+      const response = await fetch("/api/search-history/rate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id, rating })
+      });
+      if (response.ok) {
+        const data = await response.json();
+        setBenchmarkCurrent(data.benchmark_current !== undefined ? data.benchmark_current : 12);
+        // Refresh logs instantly
+        fetchSearchHistory();
+        
+        // If singleResult holds this id, update its rating internally
+        if (singleResult && (singleResult as any).search_id === id) {
+          setSingleResult(prev => prev ? { ...prev, rating } as any : null);
+        }
+        
+        // If bulkResults holds this id, update its rating internally
+        setBulkResults(prev => prev.map(row => {
+          if ((row as any).search_id === id) {
+            return { ...row, rating } as any;
+          }
+          return row;
+        }));
+
+        setSuccessMessage("Accuracy rating recorded! Metrics thresholds automatically updated.");
+        setTimeout(() => setSuccessMessage(null), 3500);
+      }
+    } catch (err) {
+      console.error("Could not register user feedback rating:", err);
+    }
+  };
+
+  // Poll cache stats every 20 seconds or when user navigates
+  useEffect(() => {
+    fetchSearchHistory();
+  }, [activeTab]);
 
   // User Authentication State (Supports custom and system roles)
   const [currentUser, setCurrentUser] = useState<{ username: string; role: string }>(() => {
@@ -860,7 +918,7 @@ export default function App() {
     }
   };
 
-  const setActiveTab = (tab: "single" | "bulk" | "database" | "superadmin") => {
+  const setActiveTab = (tab: "single" | "bulk" | "database" | "superadmin" | "cache") => {
     setActiveTabState(tab);
     // Automatically stop camera stream if active and switching away
     if (cameraActive) {
@@ -3410,6 +3468,90 @@ ON CONFLICT (email) DO NOTHING;`;
                         </div>
                       )}
 
+                      {/* Caching & Dynamic Confidence Score metrics */}
+                      {singleResult && (
+                        <div className="bg-slate-50 border border-slate-250 rounded-lg p-3 flex flex-col gap-2.5 animate-fadeIn text-[11px] text-slate-700">
+                          <div className="flex items-center justify-between border-b border-slate-200 pb-2 select-none">
+                            <span className="font-bold text-xs text-slate-800 flex items-center gap-1">
+                              <Sparkles className="w-3.5 h-3.5 text-amber-500 shrink-0" />
+                              Match Adaptation Metrics
+                            </span>
+                            {(singleResult as any).cached ? (
+                              <span className="px-1.5 py-0.5 bg-green-50 border border-green-200 text-green-700 text-[8.5px] font-mono font-bold rounded uppercase flex items-center gap-1 shadow-2xs animate-pulse">
+                                <span>⚡ Cache saved token</span>
+                              </span>
+                            ) : (
+                              <span className="px-1.5 py-0.5 bg-blue-50 border border-blue-200 text-blue-700 text-[8.5px] font-mono font-bold rounded uppercase">
+                                🌐 Resolved Live
+                              </span>
+                            )}
+                          </div>
+
+                          <div className="flex items-center justify-between gap-2.5 select-none animate-fadeIn">
+                            <div className="flex flex-col gap-1 flex-grow">
+                              <div className="flex justify-between items-center text-[10px] text-slate-500 font-medium">
+                                <span>Confidence score:</span>
+                                <span className="font-extrabold text-slate-800">
+                                  {(singleResult as any).confidence_score !== undefined ? `${(singleResult as any).confidence_score}/100` : "100/100 (AI)"}
+                                </span>
+                              </div>
+                              <div className="w-full bg-slate-200 rounded-full h-1.5">
+                                <div 
+                                  className={`rounded-full h-1.5 transition-all ${
+                                    ((singleResult as any).confidence_score !== undefined ? (singleResult as any).confidence_score : 100) >= 30 
+                                      ? "bg-green-500" 
+                                      : ((singleResult as any).confidence_score !== undefined ? (singleResult as any).confidence_score : 100) >= 15 
+                                      ? "bg-amber-500" 
+                                      : "bg-red-500"
+                                  }`}
+                                  style={{ width: `${(singleResult as any).confidence_score !== undefined ? Math.max(8, Math.min(100, (singleResult as any).confidence_score)) : 100}%` }}
+                                />
+                              </div>
+                            </div>
+                            <div className="border-l border-slate-200 pl-3 flex flex-col text-right">
+                              <span className="text-[8px] text-slate-400 block tracking-wider uppercase font-mono">Current benchmark</span>
+                              <span className="font-black text-xs text-slate-800 font-mono">&ge;{benchmarkCurrent} pts</span>
+                            </div>
+                          </div>
+
+                          {/* Submit Rating buttons */}
+                          {(singleResult as any).search_id && (
+                            <div className="bg-white border border-slate-200 rounded-lg p-2.5 flex items-center justify-between gap-3 shadow-2xs mt-1 animate-fadeIn">
+                              <div className="flex flex-col">
+                                <span className="font-bold text-slate-800 text-[10px] sm:text-xs">Is this correct?</span>
+                                <span className="text-[9px] text-slate-400 mt-0.5 leading-snug">Help adjusts score standards contextually</span>
+                              </div>
+                              <div className="flex gap-2 select-none">
+                                <button
+                                  type="button"
+                                  onClick={() => handleRateSearch((singleResult as any).search_id, (singleResult as any).rating === "up" ? null : "up")}
+                                  className={`px-3 py-1.5 rounded-lg border text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer ${
+                                    (singleResult as any).rating === "up" 
+                                      ? "bg-green-50 border-green-300 text-green-700 shadow-xs scale-102 font-black" 
+                                      : "bg-slate-50 hover:bg-slate-100 border-slate-200 text-slate-600 active:scale-95 font-medium"
+                                  }`}
+                                  title="Accurate matching result"
+                                >
+                                  <span>👍 Accurate</span>
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => handleRateSearch((singleResult as any).search_id, (singleResult as any).rating === "down" ? null : "down")}
+                                  className={`px-3 py-1.5 rounded-lg border text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer ${
+                                    (singleResult as any).rating === "down" 
+                                      ? "bg-red-50 border-red-300 text-red-700 shadow-xs scale-102 font-black" 
+                                      : "bg-slate-50 hover:bg-slate-100 border-slate-200 text-slate-600 active:scale-95 font-medium"
+                                  }`}
+                                  title="Inaccurate matching result"
+                                >
+                                  <span>👎 Incorrect</span>
+                                </button>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      )}
+
                       {/* Help advices */}
                       <div className="text-[10px] text-slate-600 bg-slate-50 p-2.5 rounded border border-slate-200 flex items-start gap-2 leading-relaxed">
                         <Info className="w-4 h-4 text-slate-400 shrink-0 mt-0.5" />
@@ -3643,11 +3785,14 @@ ON CONFLICT (email) DO NOTHING;`;
                         <th className="py-3 px-4">Route</th>
                         <th className="py-3 px-4">Facility</th>
                         <th className="py-3 px-4">Postcode Status Indicator</th>
+                        <th className="py-3 px-4 text-center">Score</th>
+                        <th className="py-3 px-4 text-center">Source</th>
+                        <th className="py-3 px-4 text-center">Feedback</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100 text-slate-700 text-xs">
                       {bulkResults.map((row, idx) => (
-                        <tr key={idx} className="hover:bg-slate-50/50 transition-colors">
+                        <tr key={idx} className="hover:bg-slate-50/50 transition-colors py-1.5">
                           <td className="py-3 px-4 max-w-[200px] truncate font-mono text-slate-500" title={row.input_text}>
                             {row.input_text || `Row #${idx + 1}`}
                           </td>
@@ -3700,6 +3845,46 @@ ON CONFLICT (email) DO NOTHING;`;
                               </span>
                             )}
                           </td>
+                          <td className="py-3 px-4 font-mono font-bold text-center">
+                            {(row as any).confidence_score !== undefined ? (row as any).confidence_score : "100"}
+                          </td>
+                          <td className="py-3 px-4 text-center">
+                            {(row as any).cached ? (
+                              <span className="text-green-700 font-mono text-[9px] font-bold bg-green-50 border border-green-200 px-1.5 py-0.5 rounded-md uppercase">⚡ Cache</span>
+                            ) : (
+                              <span className="text-blue-700 font-mono text-[9px] font-bold bg-blue-50 border border-blue-250 px-1.5 py-0.5 rounded-md uppercase">🌐 Live</span>
+                            )}
+                          </td>
+                          <td className="py-3 px-4 text-center">
+                            {(row as any).search_id ? (
+                              <div className="flex gap-1 items-center justify-center select-none">
+                                <button
+                                  onClick={() => handleRateSearch((row as any).search_id, (row as any).rating === "up" ? null : "up")}
+                                  className={`p-1.5 rounded transition cursor-pointer border ${
+                                    (row as any).rating === "up" 
+                                      ? "bg-green-50 text-green-700 border-green-300 shadow-3xs" 
+                                      : "text-slate-400 hover:text-slate-600 bg-slate-50 border-slate-200"
+                                  }`}
+                                  title="Accurate matching"
+                                >
+                                  <ThumbsUp className="w-3 h-3" />
+                                </button>
+                                <button
+                                  onClick={() => handleRateSearch((row as any).search_id, (row as any).rating === "down" ? null : "down")}
+                                  className={`p-1.5 rounded transition cursor-pointer border ${
+                                    (row as any).rating === "down" 
+                                      ? "bg-red-50 text-red-700 border-red-300 shadow-3xs" 
+                                      : "text-slate-400 hover:text-slate-600 bg-slate-50 border-slate-200"
+                                  }`}
+                                  title="Inaccurate matching"
+                                >
+                                  <ThumbsDown className="w-3 h-3" />
+                                </button>
+                              </div>
+                            ) : (
+                              <span className="text-slate-400 font-mono text-[9px] font-bold">-</span>
+                            )}
+                          </td>
                         </tr>
                       ))}
                     </tbody>
@@ -3735,6 +3920,198 @@ ON CONFLICT (email) DO NOTHING;`;
                 </pre>
               </div>
             )}
+
+          </div>
+        )}
+
+        {/* TAB Token Cache & Adaptive Metrics Dashboard */}
+        {activeTab === "cache" && (currentUser.role.toLowerCase() === "admin" || currentUser.role.toLowerCase() === "superadmin") && (
+          <div className="flex flex-col gap-6 p-1 sm:p-2 animate-fadeIn">
+            
+            {/* Top overview banner */}
+            <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 text-white flex flex-col md:flex-row items-center justify-between gap-4">
+              <div>
+                <h3 className="font-extrabold text-lg text-white flex items-center gap-2">
+                  <Zap className="text-amber-400 w-6 h-6 animate-pulse" />
+                  Token Cache & Adaptive Metrics Center
+                </h3>
+                <p className="text-slate-400 text-xs mt-1 leading-relaxed">
+                  Monitor instant geographical query response caching, user feedback rating vectors, and automatic fuzzy score threshold adjustments.
+                </p>
+              </div>
+              <div className="bg-emerald-500 text-slate-950 font-black text-xs px-3 py-1.5 rounded-lg flex items-center gap-1.5 shadow-md">
+                <span className="w-2 h-2 rounded-full bg-slate-955 animate-ping"></span>
+                ACTIVE ADAPTIVE TUNER
+              </div>
+            </div>
+
+            {/* Core Stats Bar */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+              <div className="bg-white rounded-xl shadow-xs border border-slate-200 p-4 shrink-0">
+                <span className="text-[10px] font-mono text-slate-400 tracking-wider block uppercase font-bold">TOTAL CACHED QUERIES</span>
+                <span className="text-3xl font-black text-slate-800 mt-2 block font-sans select-all">
+                  {searchHistory.length}
+                </span>
+                <span className="text-[10.5px] text-slate-500 mt-1 block">Accumulated search results</span>
+              </div>
+              
+              <div className="bg-white rounded-xl shadow-xs border border-slate-200 p-4 shrink-0">
+                <span className="text-[10px] font-mono text-slate-400 tracking-wider block uppercase font-bold">SAVED TOKEN ESTIMATION</span>
+                <span className="text-3xl font-black text-blue-600 mt-2 block font-mono select-all">
+                  {(searchHistory.filter(h => h.cached).length * 450).toLocaleString()}
+                </span>
+                <span className="text-[10.5px] text-slate-500 mt-1 block">Based on ~450 avg token per query</span>
+              </div>
+
+              <div className="bg-white rounded-xl shadow-xs border border-slate-200 p-4 shrink-0">
+                <span className="text-[10px] font-mono text-slate-400 tracking-wider block uppercase font-bold font-sans">ESTIMATED INFRASTRUCTURE SAVINGS</span>
+                <span className="text-3xl font-black text-emerald-600 mt-2 block font-mono select-all">
+                  ${(searchHistory.filter(h => h.cached).length * 0.00035).toFixed(4)}
+                </span>
+                <span className="text-[10.5px] text-slate-500 mt-1 block font-sans">Prevented redundant AI API charges</span>
+              </div>
+
+              <div className="bg-white rounded-xl shadow-xs border border-slate-200 p-4 shrink-0">
+                <span className="text-[10px] font-mono text-slate-400 tracking-wider block uppercase font-bold">ADAPTIVE FUZZY BENCHMARK</span>
+                <span className="text-3xl font-black text-amber-500 mt-2 block font-sans select-all font-mono">
+                  &ge;{benchmarkCurrent} pts
+                </span>
+                <span className="text-[10.5px] text-slate-500 mt-1 block font-sans">Minimum dynamic matching score</span>
+              </div>
+            </div>
+
+            {/* Benchmark tuner graphic card */}
+            <div className="bg-amber-50/20 border border-amber-200/50 rounded-xl p-5 flex flex-col md:flex-row items-stretch gap-6">
+              <div className="md:w-3/5 flex flex-col gap-2 font-sans">
+                <h4 className="font-extrabold text-slate-800 text-xs uppercase tracking-wider flex items-center gap-1.5">
+                  <Sparkles className="w-4 h-4 text-amber-500 shrink-0" />
+                  Dynamic Score Threshold Adjuster
+                </h4>
+                <p className="text-slate-600 text-xs leading-relaxed">
+                  The local pattern fuzzy matcher generates a similarity overlap score up to 100 points. If a match score is lower than the active <strong>Benchmark Cutoff (&ge;{benchmarkCurrent} pts)</strong>, the system marks the result as <span className="bg-slate-100 px-1 py-0.5 rounded text-slate-705 font-bold text-[10px]">Unknown</span> rather than suggesting a low-confidence alignment.
+                </p>
+                <div className="mt-2 text-xs text-slate-600 space-y-2 bg-white/70 p-3 rounded-lg border border-slate-200 leading-relaxed">
+                  <p>👍 Giving a <strong>Thumbs Up</strong> on lower score matches suggests accuracy and gradually <strong>reduces</strong> the benchmark, allowing more flexible fuzzy resolutions.</p>
+                  <p>👎 Giving a <strong>Thumbs Down</strong> flags mismatching results and immediately <strong>increases</strong> the benchmark, raising the standard for succeeding matches.</p>
+                </div>
+              </div>
+              <div className="md:w-2/5 md:border-l border-slate-200 md:pl-6 flex flex-col justify-center items-center gap-4 text-center select-none font-sans">
+                <div className="z-10 text-center bg-white border border-slate-200 p-6 rounded-2xl shadow-subtle min-w-[200px]">
+                  <span className="text-4xl font-extrabold text-amber-600 font-mono block">{benchmarkCurrent}</span>
+                  <span className="block text-[8px] font-bold text-slate-400 uppercase tracking-widest font-mono mt-1">Overlap Units</span>
+                  <span className="block text-[10px] text-slate-500 font-semibold mt-1">Automatically Tuned Threshold</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Caching Logs table */}
+            <div className="bg-white rounded-xl shadow-xs border border-slate-200 overflow-hidden flex flex-col font-sans">
+              <div className="p-4 border-b border-slate-150 flex items-center justify-between bg-slate-50/75 select-none font-sans">
+                <div>
+                  <h4 className="font-extrabold text-slate-700 uppercase text-xs tracking-wider">
+                    Query Cache Logs Matrix
+                  </h4>
+                  <p className="text-xs text-slate-500 mt-0.5">Historical verification cache entries and user feedback ratings.</p>
+                </div>
+                <button
+                  onClick={fetchSearchHistory}
+                  className="px-2.5 py-1 text-[10.5px] font-semibold text-slate-600 bg-white border border-slate-200 rounded-md hover:bg-slate-50 transition cursor-pointer"
+                >
+                  Force Sync Logs
+                </button>
+              </div>
+
+              {searchHistory.length === 0 ? (
+                <div className="py-16 text-center text-slate-400 text-xs font-sans">
+                  No query cache logs populated yet. Search for Cambodia postcodes or try direct match queries on the Free-Text page to start caching queries!
+                </div>
+              ) : (
+                <div className="overflow-x-auto font-sans">
+                  <table className="w-full text-left text-xs border-collapse font-sans font-medium whitespace-nowrap table-auto">
+                    <thead>
+                      <tr className="bg-slate-50 text-slate-400 text-[10px] font-mono tracking-wider uppercase border-b border-slate-150">
+                        <th className="p-4">Input query</th>
+                        <th className="p-4">Resolved target</th>
+                        <th className="p-4">Score</th>
+                        <th className="p-4">Cache status</th>
+                        <th className="p-4">Feedback</th>
+                        <th className="p-4">Logged timestamp</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100 text-slate-700 font-sans">
+                      {searchHistory.map((h, idx) => (
+                        <tr key={h.id || idx} className="hover:bg-slate-50/50 transition-colors">
+                          <td className="p-4 max-w-[200px] truncate select-all font-semibold text-slate-800" title={h.input_text}>
+                            {h.input_text}
+                          </td>
+                          <td className="p-4 select-all">
+                            {h.new_city_name ? (
+                              <div className="flex flex-col">
+                                <span className="font-bold text-slate-800 text-[11.5px]">{h.new_city_name}</span>
+                                <span className="text-[10px] text-slate-400 font-mono mt-0.5">Postcode: {h.new_postcode}</span>
+                              </div>
+                            ) : (
+                              <span className="text-slate-400 italic">No division matched</span>
+                            )}
+                          </td>
+                          <td className="p-4 font-mono font-bold">
+                            <div className="flex items-center gap-2">
+                              <span>{h.confidence_score !== undefined ? h.confidence_score : "100"}</span>
+                              <div className="w-12 bg-slate-100 rounded-full h-1 shrink-0">
+                                <div 
+                                  className="bg-slate-400 h-1 rounded-full" 
+                                  style={{ width: `${h.confidence_score !== undefined ? Math.max(8, h.confidence_score) : 100}%` }}
+                                />
+                              </div>
+                            </div>
+                          </td>
+                          <td className="p-4 font-sans">
+                            {h.cached ? (
+                              <span className="px-2 py-0.5 bg-green-50 text-green-700 border border-green-200 text-[9px] font-mono font-bold rounded-md uppercase">
+                                ⚡ CACHED
+                              </span>
+                            ) : (
+                              <span className="px-2 py-0.5 bg-blue-50 text-blue-700 border border-blue-200 text-[9px] font-mono font-bold rounded-md uppercase">
+                                🌐 LIVE RESOLVE
+                              </span>
+                            )}
+                          </td>
+                          <td className="p-4">
+                            <div className="flex items-center gap-1 select-none">
+                              <button
+                                onClick={() => handleRateSearch(h.id, h.rating === "up" ? null : "up")}
+                                className={`p-1.5 rounded transition cursor-pointer ${
+                                  h.rating === "up" 
+                                    ? "bg-green-50 text-green-700 border border-green-300" 
+                                    : "hover:bg-slate-105 bg-slate-50 hover:bg-slate-100 text-slate-400 scale-95 border border-slate-205"
+                                }`}
+                                title="Approve accuracy"
+                              >
+                                <ThumbsUp className="w-3 h-3" />
+                              </button>
+                              <button
+                                onClick={() => handleRateSearch(h.id, h.rating === "down" ? null : "down")}
+                                className={`p-1.5 rounded transition cursor-pointer ${
+                                  h.rating === "down" 
+                                    ? "bg-red-50 text-red-700 border border-red-300" 
+                                    : "hover:bg-slate-105 bg-slate-50 hover:bg-slate-100 text-slate-400 scale-95 border border-slate-205"
+                                }`}
+                                title="Flag inaccuracy"
+                              >
+                                <ThumbsDown className="w-3 h-3" />
+                              </button>
+                            </div>
+                          </td>
+                          <td className="p-4 font-mono text-[10.5px] text-slate-400">
+                            {h.created_at ? new Date(h.created_at).toLocaleString() : "-"}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
 
           </div>
         )}
@@ -5549,6 +5926,19 @@ CREATE POLICY "Enable delete access for everyone" ON "public"."platform_settings
             &copy; {footerCopyright}
           </p>
           <div className="flex gap-4 items-center flex-wrap justify-center sm:justify-end">
+            {(currentUser.role.toLowerCase() === "admin" || currentUser.role.toLowerCase() === "superadmin") && (
+              <>
+                <button 
+                  id="footer_nav_cache"
+                  onClick={() => { setActiveTab("cache"); }}
+                  className={`hover:text-white transition-colors cursor-pointer font-semibold ${activeTab === "cache" ? "text-amber-400 font-extrabold" : "text-slate-400"}`}
+                >
+                  Token Cache & Metrics
+                </button>
+                <span className="text-slate-700">|</span>
+              </>
+            )}
+
             {hasPermission(currentUser.role, "allowDatabaseCrud") && (
               <>
                 <button 

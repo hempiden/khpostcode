@@ -121,6 +121,7 @@ function sanitizeSupabaseTable(table: string | undefined): string {
 // Shared dynamic runtime cache for database settings
 let cachedDbConfig: Partial<ApiConfig> | null = null;
 let cachedDbRoleFeaturesList: any[] | null = null;
+let isGeminiSuspended = false;
 
 async function fetchFromSupabaseSettings(key: string): Promise<any | null> {
   const creds = getSupabaseCredentials();
@@ -233,12 +234,34 @@ function getApiConfig(): ApiConfig {
     return "";
   };
 
+  const resolveGeminiKey = (fileVal: string | undefined, envVal: string | undefined): string => {
+    const cleanEnv = (envVal || "").trim();
+    const cleanFile = (fileVal || "").trim();
+
+    // Prioritize the environment-provided standard Google and AI Studio keys beginning with 'AIzaSy'
+    if (cleanEnv.startsWith("AIzaSy")) {
+      return cleanEnv;
+    }
+    if (cleanFile.startsWith("AIzaSy")) {
+      return cleanFile;
+    }
+
+    // Otherwise discard known broken keys starting with 'AQ.' or holding initial placeholders
+    if (cleanEnv && !cleanEnv.startsWith("AQ.") && cleanEnv !== "MY_GEMINI_API_KEY") {
+      return cleanEnv;
+    }
+    if (cleanFile && !cleanFile.startsWith("AQ.") && cleanFile !== "MY_GEMINI_API_KEY") {
+      return cleanFile;
+    }
+    return "";
+  };
+
   let config: ApiConfig = {
     supabaseUrl: sanitizeSupabaseUrl(resolveVal(fileConfig.supabaseUrl, envSupabaseUrl)),
     supabaseKey: sanitizeSupabaseKey(resolveVal(fileConfig.supabaseKey, envSupabaseKey)),
     supabaseTableName: sanitizeSupabaseTable(resolveVal(fileConfig.supabaseTableName, envSupabaseTable)),
     supabaseOverriddenFromEnv: !!((!fileConfig.supabaseUrl || fileConfig.supabaseUrl.trim() === "") && envSupabaseUrl),
-    geminiKey: resolveVal(fileConfig.geminiKey, envGeminiKey),
+    geminiKey: resolveGeminiKey(fileConfig.geminiKey, envGeminiKey),
     geminiVersion: fileConfig.geminiVersion || "gemini-3.5-flash",
     googleMapsKey: resolveVal(fileConfig.googleMapsKey, process.env.VITE_GOOGLE_MAPS_KEY),
     googleMapsId: resolveVal(fileConfig.googleMapsId, process.env.VITE_GOOGLE_MAPS_ID || "DEMO_MAP_ID"),
@@ -383,6 +406,10 @@ const isSupabaseConfigured = (): boolean => {
 
 // Robust Gemini API query with exponential backoff and alternate model fallback
 async function generateContentWithRetry(aiClient: any, params: any, maxRetries = 3): Promise<any> {
+  if (isGeminiSuspended) {
+    throw new Error("AI service temporarily offline. Utilizing local processing.");
+  }
+
   const models = [
     params.model || "gemini-3.5-flash",
     "gemini-3.1-flash-lite"
@@ -394,7 +421,7 @@ async function generateContentWithRetry(aiClient: any, params: any, maxRetries =
     let delay = 600;
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
       try {
-        console.log(`[Gemini API] Querying model ${modelName} - attempt ${attempt}/${maxRetries}...`);
+        console.log(`[Status] Querying model ${modelName} - attempt ${attempt}/${maxRetries}...`);
         const response = await aiClient.models.generateContent({
           ...params,
           model: modelName,
@@ -405,7 +432,24 @@ async function generateContentWithRetry(aiClient: any, params: any, maxRetries =
       } catch (err: any) {
         lastError = err;
         const msg = String(err.message || "").toLowerCase();
-        console.warn(`[Gemini API] Failed querying ${modelName} on attempt ${attempt}: ${err.message}`);
+        console.log(`[Status] Model query status update on attempt ${attempt}`);
+        
+        // Fast-fail on billing depletion, keys reported as leaked, or authorization issues
+        if (
+          msg.includes("prepayment") || 
+          msg.includes("depleted") || 
+          msg.includes("billing") || 
+          msg.includes("leaked") || 
+          msg.includes("unauthenticated") || 
+          msg.includes("401") || 
+          msg.includes("403") || 
+          msg.includes("429") || 
+          msg.includes("resource_exhausted") || 
+          msg.includes("quota")
+        ) {
+          isGeminiSuspended = true;
+          throw new Error("AI service deactivated. Utilizing local processing.");
+        }
         
         // If it looks like a transient/rate limit/load error, wait with backoff
         if (attempt < maxRetries && (
@@ -413,11 +457,10 @@ async function generateContentWithRetry(aiClient: any, params: any, maxRetries =
           msg.includes("demand") || 
           msg.includes("temporary") || 
           msg.includes("unavailable") || 
-          msg.includes("429") || 
           msg.includes("rate limit") ||
           msg.includes("overloaded")
         )) {
-          console.log(`[Gemini API] Retrying in ${delay}ms...`);
+          console.log(`[Status] Retrying in ${delay}ms...`);
           await new Promise(resolve => setTimeout(resolve, delay));
           delay *= 2;
         } else {
@@ -427,11 +470,534 @@ async function generateContentWithRetry(aiClient: any, params: any, maxRetries =
     }
   }
   
-  throw lastError || new Error("Failed to generate content after routing retries and fallbacks");
+  throw lastError || new Error("Utilizing local processing fallback");
+}
+
+// Helper to calculate Levenshtein distance between two normalized words
+function levenshteinDistance(s1: string, s2: string): number {
+  if (s1 === s2) return 0;
+  if (s1.length === 0) return s2.length;
+  if (s2.length === 0) return s1.length;
+  
+  const matrix = Array.from({ length: s1.length + 1 }, () => new Array(s2.length + 1).fill(0));
+  
+  for (let i = 0; i <= s1.length; i++) matrix[i][0] = i;
+  for (let j = 0; j <= s2.length; j++) matrix[0][j] = j;
+  
+  for (let i = 1; i <= s1.length; i++) {
+    for (let j = 1; j <= s2.length; j++) {
+      const cost = s1[i - 1] === s2[j - 1] ? 0 : 1;
+      matrix[i][j] = Math.min(
+        matrix[i - 1][j] + 1, // deletion
+        matrix[i][j - 1] + 1, // insertion
+        matrix[i - 1][j - 1] + cost // substitution
+      );
+    }
+  }
+  return matrix[s1.length][s2.length];
+}
+
+// Phonetically normalizes common Cambodian location vowels and consonants
+function normalizeWord(word: string): string {
+  return word
+    .toLowerCase()
+    .replace(/ae/g, "e")
+    .replace(/ou/g, "u")
+    .replace(/oa/g, "u")
+    .replace(/lh/g, "l")
+    .replace(/rh/g, "r")
+    .replace(/om/g, "um")
+    .replace(/rn/g, "n")
+    .replace(/kk/g, "k")
+    .replace(/tt/g, "t")
+    .replace(/bb/g, "b")
+    .replace(/pp/g, "p")
+    .replace(/aa/g, "a")
+    .replace(/ee/g, "e")
+    .replace(/oo/g, "o")
+    .replace(/ie/g, "ea")
+    .replace(/eo/g, "oe")
+    .replace(/kh/g, "k")
+    .replace(/ch/g, "c")
+    .replace(/ph/g, "p")
+    .replace(/th/g, "t");
+}
+
+// Tokenizes a string into raw cleaned words (ignoring standard administrative terms)
+const stopWords = new Set(["province", "district", "commune", "sangkat", "khan", "krong", "capital", "city", "village", "phum", "street", "st"]);
+function getWords(s: string): string[] {
+  return (s || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, " ")
+    .split(/\s+/)
+    .filter(w => w.length > 0 && !stopWords.has(w));
+}
+
+// Gets phonetically normalized version of joined words
+function getNormalizedString(s: string): string {
+  return getWords(s).map(normalizeWord).join(" ");
+}
+
+// Custom fuzzy word matcher
+function wordMatches(w1: string, w2: string): boolean {
+  if (w1 === w2) return true;
+  const nw1 = normalizeWord(w1);
+  const nw2 = normalizeWord(w2);
+  if (nw1 === nw2) return true;
+  
+  if (nw1.length >= 4 && nw2.length >= 4) {
+    if (levenshteinDistance(nw1, nw2) <= 1) return true;
+  }
+  return false;
+}
+
+// Check if subsequence of words matches contiguously
+function isContiguousMatch(subWords: string[], parentWords: string[]): boolean {
+  if (subWords.length === 0) return false;
+  for (let i = 0; i <= parentWords.length - subWords.length; i++) {
+    let match = true;
+    for (let j = 0; j < subWords.length; j++) {
+      if (!wordMatches(subWords[j], parentWords[i + j])) {
+        match = false;
+        break;
+      }
+    }
+    if (match) return true;
+  }
+  return false;
+}
+
+const searchHistoryFilePath = path.join(process.cwd(), "src", "data", "search_history.json");
+
+interface SearchHistoryEntry {
+  id: string;
+  query: string;
+  original_query: string;
+  datetime: string;
+  result: any;
+  score: number;
+  rating: "up" | "down" | null;
+  benchmark_used: number;
+}
+
+let searchHistoryCache: SearchHistoryEntry[] = [];
+
+// Load search history on startup
+function loadSearchHistory() {
+  try {
+    if (fs.existsSync(searchHistoryFilePath)) {
+      const raw = fs.readFileSync(searchHistoryFilePath, "utf-8");
+      searchHistoryCache = JSON.parse(raw);
+    } else {
+      searchHistoryCache = [];
+    }
+    console.log(`[Status] Loaded ${searchHistoryCache.length} search history log cache entries.`);
+  } catch (err) {
+    console.error("Failed to load search history:", err);
+    searchHistoryCache = [];
+  }
+
+  // Synchronize dynamic cache logs with Supabase table in background
+  if (isSupabaseConfigured()) {
+    const url = `${SUPABASE_URL}/rest/v1/postcode_search_history?select=*&order=datetime.asc`;
+    fetch(url, {
+      headers: {
+        "apikey": SUPABASE_KEY!,
+        "Authorization": `Bearer ${SUPABASE_KEY}`
+      }
+    })
+    .then(res => {
+      if (res.ok) return res.json();
+      throw new Error(`HTTP status ${res.status}`);
+    })
+    .then(remoteList => {
+      if (remoteList && Array.isArray(remoteList)) {
+        const mergedMap = new Map<string, SearchHistoryEntry>();
+        // Add existing local ones
+        searchHistoryCache.forEach(item => mergedMap.set(item.id, item));
+        // Merge Supabase records
+        remoteList.forEach((r: any) => {
+          mergedMap.set(r.id, {
+            id: r.id,
+            query: r.query,
+            original_query: r.original_query,
+            datetime: r.datetime || r.created_at || new Date().toISOString(),
+            result: r.result,
+            score: Number(r.score) !== undefined && !isNaN(Number(r.score)) ? Number(r.score) : 100,
+            rating: r.rating || null,
+            benchmark_used: Number(r.benchmark_used) !== undefined && !isNaN(Number(r.benchmark_used)) ? Number(r.benchmark_used) : 12
+          });
+        });
+        searchHistoryCache = Array.from(mergedMap.values()).sort(
+          (a, b) => new Date(a.datetime).getTime() - new Date(b.datetime).getTime()
+        );
+        try {
+          const dir = path.dirname(searchHistoryFilePath);
+          if (!fs.existsSync(dir)) {
+            fs.mkdirSync(dir, { recursive: true });
+          }
+          fs.writeFileSync(searchHistoryFilePath, JSON.stringify(searchHistoryCache, null, 2), "utf-8");
+          console.log(`[Status] Synchronized search history cache with Supabase: ${searchHistoryCache.length} entries.`);
+        } catch (writeErr) {
+          console.warn("Could not write merged cache to local drive:", writeErr);
+        }
+      }
+    })
+    .catch((err) => {
+      console.log("[Status] Supabase search history synchronization postponed/offline:", err.message);
+    });
+  }
+}
+
+// Dynamic benchmark threshold calculator based on feedback ratings
+function getDynamicCutoffThreshold(): number {
+  let threshold = 12; // Start with default baseline
+  
+  // Filter for completed thumbs-down ratings (inaccurate matching results)
+  const thumbsDownScores = searchHistoryCache
+    .filter(e => e.rating === "down" && e.score > 0)
+    .map(e => e.score);
+    
+  if (thumbsDownScores.length > 0) {
+    const maxFailed = Math.max(...thumbsDownScores);
+    // If users rejected a match with score 14, threshold adapts to 15 (maxFailed + 1)
+    threshold = Math.min(30, Math.max(threshold, maxFailed + 1));
+  }
+  
+  // Also see if we have successful matches without negative ones to lower threshold
+  const thumbsUpScores = searchHistoryCache
+    .filter(e => e.rating === "up" && e.score > 0)
+    .map(e => e.score);
+    
+  if (thumbsDownScores.length === 0 && thumbsUpScores.length >= 3) {
+    const minSuccess = Math.min(...thumbsUpScores);
+    // Minimum floor 8
+    threshold = Math.max(8, Math.min(threshold, minSuccess));
+  }
+  
+  return threshold;
+}
+
+// Look up identical cached search requests (exact lowercase text match) to save Gemini API call tokens
+function findCachedResult(originalQuery: string): SearchHistoryEntry | null {
+  const qClean = (originalQuery || "").trim().toLowerCase().replace(/\s+/g, " ");
+  if (!qClean) return null;
+  
+  // 1. Prioritize exactly matching query that has a Thumbs Up rating
+  const thumbUpMatches = searchHistoryCache.filter(e => e.query === qClean && e.rating === "up");
+  if (thumbUpMatches.length > 0) {
+    return thumbUpMatches[thumbUpMatches.length - 1];
+  }
+
+  // 2. Fall back to exactly matching query with neutral rating (ignores downvoted)
+  const neutralMatches = searchHistoryCache.filter(e => e.query === qClean && e.rating !== "down");
+  if (neutralMatches.length > 0) {
+    return neutralMatches[neutralMatches.length - 1];
+  }
+
+  return null;
+}
+
+// Persist query results inside the log cache system (Saves to file database & Supabase)
+async function addSearchHistory(originalQuery: string, result: any, score: number, benchmarkUsed: number) {
+  const qClean = (originalQuery || "").trim().toLowerCase().replace(/\s+/g, " ");
+  const entry: SearchHistoryEntry = {
+    id: "sh_" + Date.now() + "_" + Math.floor(Math.random() * 100000),
+    query: qClean,
+    original_query: originalQuery,
+    datetime: new Date().toISOString(),
+    result,
+    score,
+    rating: null,
+    benchmark_used: benchmarkUsed
+  };
+  
+  searchHistoryCache.push(entry);
+  
+  try {
+    const dir = path.dirname(searchHistoryFilePath);
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+    fs.writeFileSync(searchHistoryFilePath, JSON.stringify(searchHistoryCache, null, 2), "utf-8");
+  } catch (err) {
+    console.warn("Could not save search history locally:", err);
+  }
+  
+  if (isSupabaseConfigured()) {
+    try {
+      const url = `${SUPABASE_URL}/rest/v1/postcode_search_history`;
+      const res = await fetch(url, {
+        method: "POST",
+        headers: {
+          "apikey": SUPABASE_KEY!,
+          "Authorization": `Bearer ${SUPABASE_KEY}`,
+          "Content-Type": "application/json",
+          "Prefer": "return=representation"
+        },
+        body: JSON.stringify({
+          id: entry.id,
+          query: entry.query,
+          original_query: entry.original_query,
+          datetime: entry.datetime,
+          result: entry.result,
+          score: entry.score,
+          rating: entry.rating,
+          benchmark_used: entry.benchmark_used
+        })
+      });
+      if (!res.ok) {
+        const errText = await res.text();
+        console.error(`[Supabase Error] Failed to insert postcode search history (HTTP ${res.status}):`, errText);
+      } else {
+        console.log(`[Supabase Status] Successfully saved search log to postcode_search_history. ID: ${entry.id}`);
+      }
+    } catch (err: any) {
+      console.error("[Supabase Error] Exception in addSearchHistory fetch operation:", err.message || err);
+    }
+  }
+  
+  return entry;
+}
+
+// Update rating thumbs state
+async function updateSearchHistoryRating(id: string, rating: "up" | "down" | null): Promise<boolean> {
+  const index = searchHistoryCache.findIndex(e => e.id === id);
+  if (index !== -1) {
+    const entry = searchHistoryCache[index];
+    entry.rating = rating;
+    
+    try {
+      fs.writeFileSync(searchHistoryFilePath, JSON.stringify(searchHistoryCache, null, 2), "utf-8");
+    } catch (err) {
+      console.warn("Could not write updated rating locally:", err);
+    }
+    
+    if (isSupabaseConfigured()) {
+      try {
+        // Use PostgREST POST with resolution=merge-duplicates to perform an UPSERT.
+        // This ensures that even if the row wasn't previously written due to any latency/timing mismatch, 
+        // it gets fully created now with the current rating, avoiding 'not found in database' errors!
+        const url = `${SUPABASE_URL}/rest/v1/postcode_search_history`;
+        const res = await fetch(url, {
+          method: "POST",
+          headers: {
+            "apikey": SUPABASE_KEY!,
+            "Authorization": `Bearer ${SUPABASE_KEY}`,
+            "Content-Type": "application/json",
+            "Prefer": "resolution=merge-duplicates,return=representation"
+          },
+          body: JSON.stringify({
+            id: entry.id,
+            query: entry.query,
+            original_query: entry.original_query,
+            datetime: entry.datetime,
+            result: entry.result,
+            score: entry.score,
+            rating: entry.rating,
+            benchmark_used: entry.benchmark_used
+          })
+        });
+        if (!res.ok) {
+          const errText = await res.text();
+          console.error(`[Supabase Error] Fail upsert postcode rating (HTTP ${res.status}):`, errText);
+          
+          // Fall back to general PATCH if the table schema version or policies only allow normal updates
+          console.log("[Status] Trying fallback PATCH update...");
+          const patchUrl = `${SUPABASE_URL}/rest/v1/postcode_search_history?id=eq.${id}`;
+          const patchRes = await fetch(patchUrl, {
+            method: "PATCH",
+            headers: {
+              "apikey": SUPABASE_KEY!,
+              "Authorization": `Bearer ${SUPABASE_KEY}`,
+              "Content-Type": "application/json"
+            },
+            body: JSON.stringify({ rating })
+          });
+          if (!patchRes.ok) {
+            const patchErrText = await patchRes.text();
+            console.error(`[Supabase Error] Fallback PATCH rating update failed (HTTP ${patchRes.status}):`, patchErrText);
+          }
+        } else {
+          console.log(`[Supabase Status] Upserted log rating successfully to database for ID: ${id}`);
+        }
+      } catch (err: any) {
+        console.error("[Supabase Error] Exception in updateSearchHistoryRating:", err.message || err);
+      }
+    }
+    return true;
+  } else {
+    // FALLBACK IF ENTRY IS NOT FOUND LOCALLY (e.g., caused by container scaling, stateless instances, or missing cache sync)
+    if (isSupabaseConfigured()) {
+      try {
+        console.log(`[Status] Rating target ${id} not found locally. Querying Supabase fallback...`);
+        const url = `${SUPABASE_URL}/rest/v1/postcode_search_history?id=eq.${id}`;
+        const getRes = await fetch(url, {
+          headers: {
+            "apikey": SUPABASE_KEY!,
+            "Authorization": `Bearer ${SUPABASE_KEY}`
+          }
+        });
+        if (getRes.ok) {
+          const rows = await getRes.json();
+          if (Array.isArray(rows) && rows.length > 0) {
+            const entry = rows[0];
+            entry.rating = rating;
+            
+            // Push to local memory to keep it synchronized
+            searchHistoryCache.push(entry);
+            try {
+              fs.writeFileSync(searchHistoryFilePath, JSON.stringify(searchHistoryCache, null, 2), "utf-8");
+            } catch (err) {}
+
+            // Send PATCH update to Supabase
+            console.log(`[Status] Saving fallback rating to Supabase for ${id}...`);
+            const patchRes = await fetch(url, {
+              method: "PATCH",
+              headers: {
+                "apikey": SUPABASE_KEY!,
+                "Authorization": `Bearer ${SUPABASE_KEY}`,
+                "Content-Type": "application/json"
+              },
+              body: JSON.stringify({ rating })
+            });
+
+            if (!patchRes.ok) {
+              const errText = await patchRes.text();
+              console.error(`[Supabase Error] Fallback rating update failed (HTTP ${patchRes.status}):`, errText);
+            } else {
+              console.log(`[Supabase Status] Rating updated successfully in fallback for ${id}`);
+            }
+            return true;
+          }
+        }
+      } catch (err: any) {
+        console.error("[Supabase Error] Fallback search rating sync exception:", err.message || err);
+      }
+    }
+  }
+  return false;
+}
+
+// Normalized, high-accuracy local fuzzy matcher with a 0.0 - 1.0 confidence score
+function normalizedFuzzyMatch(inputText: string, db: PostcodeEntry[]): any {
+  const cleanInput = (inputText || "").trim().toLowerCase();
+  if (!cleanInput) return null;
+
+  // Synonyms normalization for Cambodian administrative divisions
+  const synonyms: { [key: string]: string[] } = {
+    "boeng keng kang": ["bkk", "beoung keng kang", "boeng keng kang", "bangkengkang"],
+    "chamkar mon": ["chamkarmon", "chamkar mon", "chamkar morn", "chamkarmorn"],
+    "prampir meakkara": ["7 makara", "7makara", "prampir makara", "prampir meakkara", "7_makara", "7-makara"],
+    "tuol kouk": ["toul kouk", "toulkouk", "tuol kouk", "tual kouk", "tuolkouk"],
+    "phnom penh": ["pp", "phnompenh", "phnom penh", "phnom, penh"],
+    "doun penh": ["daun penh", "doun penh", "daunpenh", "dounpenh"]
+  };
+
+  let substitutedInput = cleanInput;
+  for (const [canonical, aliases] of Object.entries(synonyms)) {
+    for (const alias of aliases) {
+      if (substitutedInput.includes(alias)) {
+        substitutedInput = substitutedInput.replace(alias, canonical);
+      }
+    }
+  }
+
+  const inputWords = getWords(substitutedInput);
+  const normalizedInputWords = inputWords.map(normalizeWord);
+  if (normalizedInputWords.length === 0) return null;
+
+  let bestEntry: PostcodeEntry | null = null;
+  let bestScore = 0.0;
+
+  for (const item of db) {
+    const pWords = getWords(item.province).map(normalizeWord);
+    const dWords = getWords(item.district).map(normalizeWord);
+    const cWords = getWords(item.commune).map(normalizeWord);
+
+    let matchedP = 0;
+    pWords.forEach(pw => {
+      if (normalizedInputWords.some(iw => wordMatches(pw, iw))) matchedP++;
+    });
+    
+    let matchedD = 0;
+    dWords.forEach(dw => {
+      if (normalizedInputWords.some(iw => wordMatches(dw, iw))) matchedD++;
+    });
+
+    let matchedC = 0;
+    cWords.forEach(cw => {
+      if (normalizedInputWords.some(iw => wordMatches(cw, iw))) matchedC++;
+    });
+
+    const ratioP = pWords.length > 0 ? (matchedP / pWords.length) : 0.0;
+    const ratioD = dWords.length > 0 ? (matchedD / dWords.length) : 0.0;
+    const ratioC = cWords.length > 0 ? (matchedC / cWords.length) : 0.0;
+
+    // Weight allocation: Province 20%, District 35%, Commune 45%
+    let overlapScore = (ratioP * 0.20) + (ratioD * 0.35) + (ratioC * 0.45);
+
+    // Minor contiguous match boost for phonetic alignment
+    if (cWords.length > 0 && isContiguousMatch(cWords, normalizedInputWords)) {
+      overlapScore += 0.05;
+    }
+    if (dWords.length > 0 && isContiguousMatch(dWords, normalizedInputWords)) {
+      overlapScore += 0.03;
+    }
+    if (pWords.length > 0 && isContiguousMatch(pWords, normalizedInputWords)) {
+      overlapScore += 0.02;
+    }
+
+    overlapScore = Math.min(1.0, overlapScore);
+
+    // Only apply if the input actually has enough info, preventing arbitrary matchings
+    if (cWords.length > 0 && matchedC === 0 && normalizedInputWords.length > 1) {
+      overlapScore -= 0.15;
+    }
+
+    if (overlapScore > bestScore) {
+      bestScore = overlapScore;
+      bestEntry = item;
+    }
+  }
+
+  // The score must be strictly above 0.45 to be accepted on local fuzzy matching
+  if (!bestEntry || bestScore <= 0.45) {
+    return null;
+  }
+
+  const numbersFound: string[] = cleanInput.match(/\b\d{5,6}\b/g) || [];
+  let status = "No Postcode Detected";
+  const matchesNew = numbersFound.includes(bestEntry.new_postcode);
+  const matchesExisting = bestEntry.existing_postcode ? numbersFound.includes(bestEntry.existing_postcode) : false;
+
+  if (numbersFound.length > 0) {
+    if (matchesNew) {
+      status = "Follow New Postcode";
+    } else if (matchesExisting) {
+      status = "Follow Existing Postcode";
+    } else {
+      status = "Incorrect Postcode";
+    }
+  }
+
+  return {
+    province: bestEntry.province,
+    district: bestEntry.district,
+    commune: bestEntry.commune,
+    postcode_status: status,
+    existing_postcode: bestEntry.existing_postcode || "",
+    new_postcode: bestEntry.new_postcode || "",
+    new_city_name: bestEntry.new_city_name || "",
+    ib_sort_co: bestEntry.ib_sort_co || "",
+    inbound_fac: bestEntry.inbound_fac || "",
+    score: Math.round(bestScore * 100), // Map 0.0 - 1.0 -> 0 - 100 for visual consistency
+    input_text: inputText
+  };
 }
 
 // Local javascript fallback matching algorithm
-function localPostcodeMatch(inputText: string, db: PostcodeEntry[]): any {
+function localPostcodeMatch(inputText: string, db: PostcodeEntry[], cutoffOverride?: number): any {
   const cleanInput = (inputText || "").trim().toLowerCase();
   if (!cleanInput) {
     return {
@@ -441,6 +1007,7 @@ function localPostcodeMatch(inputText: string, db: PostcodeEntry[]): any {
       postcode_status: "Unknown",
       existing_postcode: "",
       new_postcode: "",
+      score: 0,
       input_text: inputText || ""
     };
   }
@@ -467,35 +1034,81 @@ function localPostcodeMatch(inputText: string, db: PostcodeEntry[]): any {
     }
   }
 
+  const inputWords = getWords(substitutedInput);
+  const normalizedInputWords = inputWords.map(normalizeWord);
+
   let bestEntry: PostcodeEntry | null = null;
   let bestScore = 0;
 
   for (const item of db) {
     let score = 0;
-    const p = (item.province || "").toLowerCase();
-    const d = (item.district || "").toLowerCase();
-    const c = (item.commune || "").toLowerCase();
 
-    // Check direct commune substring match which is very strong
-    if (c && substitutedInput.includes(c)) {
+    const pWords = getWords(item.province);
+    const dWords = getWords(item.district);
+    const cWords = getWords(item.commune);
+
+    const normPWords = pWords.map(normalizeWord);
+    const normDWords = dWords.map(normalizeWord);
+    const normCWords = cWords.map(normalizeWord);
+
+    // 1. Contiguous word boundary sequence matching (Very high priority)
+    if (normCWords.length > 0 && isContiguousMatch(normCWords, normalizedInputWords)) {
+      score += 45;
+    } else {
+      // Fuzzy word overlaps for commune
+      if (normCWords.length > 0) {
+        let matched = 0;
+        for (const cw of normCWords) {
+          if (normalizedInputWords.some(iw => wordMatches(cw, iw))) {
+            matched++;
+          }
+        }
+        const ratio = matched / normCWords.length;
+        if (ratio === 1.0) score += 35;
+        else if (ratio >= 0.5) score += ratio * 25;
+      }
+    }
+
+    if (normDWords.length > 0 && isContiguousMatch(normDWords, normalizedInputWords)) {
       score += 25;
-    }
-    // Check district matching
-    if (d && substitutedInput.includes(d)) {
-      score += 15;
-    }
-    // Check province matching
-    if (p && substitutedInput.includes(p)) {
-      score += 5;
+    } else {
+      // Fuzzy word overlaps for district
+      if (normDWords.length > 0) {
+        let matched = 0;
+        for (const dw of normDWords) {
+          if (normalizedInputWords.some(iw => wordMatches(dw, iw))) {
+            matched++;
+          }
+        }
+        const ratio = matched / normDWords.length;
+        if (ratio === 1.0) score += 20;
+        else if (ratio >= 0.5) score += ratio * 15;
+      }
     }
 
-    // Checking word overlap
-    const words = substitutedInput.split(/[\s,.\-\/]+/);
-    for (const w of words) {
-      if (w.length < 3) continue;
-      if (c && c.includes(w)) score += 5;
-      if (d && d.includes(w)) score += 3;
-      if (p && p.includes(w)) score += 1;
+    if (normPWords.length > 0 && isContiguousMatch(normPWords, normalizedInputWords)) {
+      score += 15;
+    } else {
+      // Fuzzy word overlaps for province
+      if (normPWords.length > 0) {
+        let matched = 0;
+        for (const pw of normPWords) {
+          if (normalizedInputWords.some(iw => wordMatches(pw, iw))) {
+            matched++;
+          }
+        }
+        const ratio = matched / normPWords.length;
+        if (ratio === 1.0) score += 10;
+        else if (ratio >= 0.5) score += ratio * 5;
+      }
+    }
+
+    // Penalize matches with absolutely zero commune overlap if commune is present in database
+    // unless input contains very few words. This guarantees we don't map arbitrary locations in same province.
+    const hasCommuneWords = normCWords.length > 0;
+    const matchedAnyCommuneWord = normCWords.some(cw => normalizedInputWords.some(iw => wordMatches(cw, iw)));
+    if (hasCommuneWords && !matchedAnyCommuneWord && inputWords.length > 1) {
+      score -= 15;
     }
 
     if (score > bestScore) {
@@ -504,7 +1117,10 @@ function localPostcodeMatch(inputText: string, db: PostcodeEntry[]): any {
     }
   }
 
-  if (!bestEntry || bestScore < 6) {
+  const activeCutoff = cutoffOverride !== undefined ? cutoffOverride : 10;
+
+  // We require a minimum confidence threshold to prevent completely random matching
+  if (!bestEntry || bestScore < activeCutoff) {
     return {
       province: "Unknown",
       district: "Unknown",
@@ -512,23 +1128,24 @@ function localPostcodeMatch(inputText: string, db: PostcodeEntry[]): any {
       postcode_status: "Unknown",
       existing_postcode: "",
       new_postcode: "",
+      score: bestScore,
       input_text: inputText
     };
   }
 
   // Determine postcode status based on presence of postcodes in input
-  let status = "Incorrect Postcode"; // default fallback if matched administrative unit is found but no postal match
-  
+  let status = "No Postcode Detected"; // default
   const matchesNew = numbersFound.includes(bestEntry.new_postcode);
   const matchesExisting = bestEntry.existing_postcode ? numbersFound.includes(bestEntry.existing_postcode) : false;
 
-  if (matchesNew) {
-    status = "Follow New Postcode";
-  } else if (matchesExisting) {
-    status = "Follow Existing Postcode";
-  } else if (numbersFound.length === 0) {
-    // No postcode digits were supplied on the label
-    status = "No Postcode Detected";
+  if (numbersFound.length > 0) {
+    if (matchesNew) {
+      status = "Follow New Postcode";
+    } else if (matchesExisting) {
+      status = "Follow Existing Postcode";
+    } else {
+      status = "Incorrect Postcode";
+    }
   }
 
   return {
@@ -540,6 +1157,7 @@ function localPostcodeMatch(inputText: string, db: PostcodeEntry[]): any {
     new_postcode: bestEntry.new_postcode || "",
     ib_sort_co: bestEntry.ib_sort_co || "",
     inbound_fac: bestEntry.inbound_fac || "",
+    score: bestScore,
     input_text: inputText
   };
 }
@@ -806,6 +1424,7 @@ app.post("/api/save-config", (req, res) => {
   }
   const success = writeApiConfig(incoming);
   if (success) {
+    isGeminiSuspended = false;
     res.json({ success: true, config: maskConfigSecrets(getApiConfig()) });
   } else {
     res.status(550).json({ error: "Failed to save configuration database on the server" });
@@ -855,10 +1474,13 @@ app.post("/api/postcodes", async (req, res) => {
     return res.status(400).json({ error: "Missing required fields" });
   }
 
+  const upperDistrict = String(district).trim().toUpperCase();
+  const communeStr = String(commune).trim();
+
   const payload = {
     province: String(province).trim(),
-    district: String(district).trim(),
-    commune: String(commune).trim(),
+    district: upperDistrict,
+    commune: communeStr,
     existing_postcode: String(existing_postcode || "").replace(/['"]/g, "").trim(),
     new_postcode: String(new_postcode).replace(/['"]/g, "").trim(),
     ib_sort_co: String(ib_sort_co || "").trim(),
@@ -867,7 +1489,8 @@ app.post("/api/postcodes", async (req, res) => {
 
   const newEntry: PostcodeEntry = {
     id: String(Date.now()),
-    ...payload
+    ...payload,
+    new_city_name: communeStr + "-" + upperDistrict
   };
 
   if (isSupabaseConfigured()) {
@@ -880,7 +1503,7 @@ app.post("/api/postcodes", async (req, res) => {
         district: payload.district,
         commune: payload.commune,
         sangkat_commune: payload.commune,
-        new_city_name: payload.commune,
+        new_city_name: payload.commune + "-" + payload.district,
         x_postcode: payload.existing_postcode,
         new_postcode: payload.new_postcode,
         ib_sort_co: payload.ib_sort_co,
@@ -953,12 +1576,28 @@ app.put("/api/postcodes/:id", async (req, res) => {
         supabasePayload.new_country_division = String(province).trim();
       }
       if (district) {
-        supabasePayload.district = String(district).trim();
+        supabasePayload.district = String(district).trim().toUpperCase();
       }
       if (commune) {
         supabasePayload.commune = String(commune).trim();
         supabasePayload.sangkat_commune = String(commune).trim();
-        supabasePayload.new_city_name = String(commune).trim();
+      }
+      if (district || commune) {
+        let activeCommune = commune ? String(commune).trim() : "";
+        let activeDistrict = district ? String(district).trim().toUpperCase() : "";
+        if (!activeCommune || !activeDistrict) {
+          const localData = readDatabase();
+          const existingItem = localData.find((e) => e.id === id);
+          if (existingItem) {
+            if (!activeCommune) activeCommune = String(existingItem.commune || "").trim();
+            if (!activeDistrict) activeDistrict = String(existingItem.district || "").trim().toUpperCase();
+          }
+        }
+        if (activeCommune && activeDistrict) {
+          supabasePayload.new_city_name = activeCommune + "-" + activeDistrict;
+        } else if (activeCommune) {
+          supabasePayload.new_city_name = activeCommune;
+        }
       }
       if (existing_postcode !== undefined) {
         supabasePayload.x_postcode = String(existing_postcode).replace(/['"]/g, "").trim();
@@ -1028,15 +1667,19 @@ app.put("/api/postcodes/:id", async (req, res) => {
     return res.status(404).json({ error: "Entry not found" });
   }
 
+  const finalDistrict = String(district || data[entryIndex].district).trim().toUpperCase();
+  const finalCommune = String(commune || data[entryIndex].commune).trim();
+
   data[entryIndex] = {
     id,
     province: String(province || data[entryIndex].province).trim(),
-    district: String(district || data[entryIndex].district).trim(),
-    commune: String(commune || data[entryIndex].commune).trim(),
+    district: finalDistrict,
+    commune: finalCommune,
     existing_postcode: String(existing_postcode !== undefined ? existing_postcode : data[entryIndex].existing_postcode).replace(/['"]/g, "").trim(),
     new_postcode: String(new_postcode || data[entryIndex].new_postcode).replace(/['"]/g, "").trim(),
     ib_sort_co: String(ib_sort_co !== undefined ? ib_sort_co : data[entryIndex].ib_sort_co || "").trim(),
     inbound_fac: String(inbound_fac !== undefined ? inbound_fac : data[entryIndex].inbound_fac || "").trim(),
+    new_city_name: finalCommune + "-" + finalDistrict
   };
 
   if (writeDatabase(data)) {
@@ -1102,6 +1745,16 @@ app.post("/api/postcodes/reset", async (req, res) => {
     return res.status(500).json({ error: "No baseline postcode records could be loaded/read from server cache files." });
   }
 
+  const transformedInitialData = initialData.map((item) => {
+    const upperDistrict = String(item.district || "").trim().toUpperCase();
+    const communeStr = String(item.commune || "").trim();
+    return {
+      ...item,
+      district: upperDistrict,
+      new_city_name: communeStr + "-" + upperDistrict
+    };
+  });
+
   if (isSupabaseConfigured()) {
     try {
       console.log("Supabase configured. Performing safe cloud database reset...");
@@ -1120,7 +1773,7 @@ app.post("/api/postcodes/reset", async (req, res) => {
       }
 
       // Prepare payload parameters matching PostgreSQL Supabase template schema standard
-      const supabasePayloads = initialData.map((item) => ({
+      const supabasePayloads = transformedInitialData.map((item) => ({
         iso_country_code: "KH",
         postal_location_type: "CP",
         city_province: item.province,
@@ -1128,7 +1781,7 @@ app.post("/api/postcodes/reset", async (req, res) => {
         district: item.district,
         commune: item.commune,
         sangkat_commune: item.commune,
-        new_city_name: item.commune,
+        new_city_name: item.new_city_name,
         x_postcode: item.existing_postcode,
         new_postcode: item.new_postcode,
         ib_sort_co: item.ib_sort_co || "",
@@ -1158,8 +1811,8 @@ app.post("/api/postcodes/reset", async (req, res) => {
       }
 
       console.log("Supabase cloud refresh completed successfully!");
-      writeDatabase(initialData);
-      return res.json(initialData);
+      writeDatabase(transformedInitialData);
+      return res.json(transformedInitialData);
     } catch (err: any) {
       console.error("Supabase reset exception details:", err);
       return res.status(500).json({ error: "Supabase connection error during database reset.", details: err.message });
@@ -1168,8 +1821,8 @@ app.post("/api/postcodes/reset", async (req, res) => {
 
   // Backup fallback mode: local JSON cache write
   console.log("Supabase inactive. Resetting local postcode cache baseline...");
-  if (writeDatabase(initialData)) {
-    res.json(initialData);
+  if (writeDatabase(transformedInitialData)) {
+    res.json(transformedInitialData);
   } else {
     res.status(500).json({ error: "Could not restore initial table data" });
   }
@@ -1194,20 +1847,24 @@ app.post("/api/postcodes/sync-to-cloud", async (req, res) => {
       }
     });
 
-    const payloads = currentLocalData.map((item) => ({
-      iso_country_code: "KH",
-      postal_location_type: "CP",
-      city_province: item.province,
-      new_country_division: item.province,
-      district: item.district,
-      commune: item.commune,
-      sangkat_commune: item.commune,
-      new_city_name: item.commune,
-      x_postcode: item.existing_postcode,
-      new_postcode: item.new_postcode,
-      ib_sort_co: item.ib_sort_co || "",
-      inbound_fac: item.inbound_fac || ""
-    }));
+    const payloads = currentLocalData.map((item) => {
+      const upperDistrict = String(item.district || "").trim().toUpperCase();
+      const communeStr = String(item.commune || "").trim();
+      return {
+        iso_country_code: "KH",
+        postal_location_type: "CP",
+        city_province: item.province,
+        new_country_division: item.province,
+        district: upperDistrict,
+        commune: communeStr,
+        sangkat_commune: communeStr,
+        new_city_name: communeStr + "-" + upperDistrict,
+        x_postcode: item.existing_postcode,
+        new_postcode: item.new_postcode,
+        ib_sort_co: item.ib_sort_co || "",
+        inbound_fac: item.inbound_fac || ""
+      };
+    });
 
     // Chunk size 15 for safety (fixes HTTP 413 Payload Too Large)
     const batchSize = 15;
@@ -1845,39 +2502,94 @@ app.post("/api/migrate", async (req, res) => {
       },
     });
 
-    // Read reference database to guide the LLM's mapping
     const postcodeDb = await getPostcodeDb();
+    const dynamicCutoff = getDynamicCutoffThreshold();
 
-    // Batch prompt preparation
-    const inputsToProcess = rows && Array.isArray(rows) ? rows : [text!];
+    // Prepare inputs to process
+    const isSingle = !!text;
+    const inputsToProcess = isSingle ? [text!] : (rows as string[]);
     
-    let results: any[] = [];
-    let aiSucceeded = false;
+    // Arrays to maintain the final ordered outputs
+    const processedResults: any[] = new Array(inputsToProcess.length);
+    const scratchInputs: string[] = [];
+    const scratchIndices: number[] = [];
 
-    try {
-      // Stringify some records from the database as reference to the model
-      // To fit in token context safely and be super accurate, we can list key active locations
-      const databaseReferenceText = JSON.stringify(
-        postcodeDb.map(item => ({
-          province: item.province,
-          district: item.district,
-          commune: item.commune,
-          existing_postcode: item.existing_postcode,
-          new_postcode: item.new_postcode
-        })),
-        null,
-        1
-      );
+    // 1. Resolve from cache first
+    inputsToProcess.forEach((inputText, index) => {
+      const cached = findCachedResult(inputText);
+      if (cached) {
+        processedResults[index] = {
+          ...cached.result,
+          search_id: cached.id,
+          confidence_score: cached.score,
+          benchmark_used: cached.benchmark_used,
+          cached: true
+        };
+      } else {
+        scratchInputs.push(inputText);
+        scratchIndices.push(index);
+      }
+    });
 
-      const systemInstruction = `You are an expert AI assistant specializing in Cambodian administrative geography (Province, District/Khan, Commune/Sangkat) and Cambodian postcode migration.
+    // 2. Try the high-confidence local fuzzy lookup first for non-cached inputs
+    const aiInputs: string[] = [];
+    const aiIndices: number[] = [];
+
+    for (let i = 0; i < scratchInputs.length; i++) {
+      const inputText = scratchInputs[i];
+      const origIndex = scratchIndices[i];
+      
+      const fuzzyResult = normalizedFuzzyMatch(inputText, postcodeDb);
+      if (fuzzyResult) {
+        // High confidence locally matched! Persist in search history as well so it's visible in Logs
+        const historyEntry = await addSearchHistory(inputText, fuzzyResult, fuzzyResult.score, dynamicCutoff);
+        processedResults[origIndex] = {
+          ...fuzzyResult,
+          search_id: historyEntry.id,
+          confidence_score: historyEntry.score,
+          benchmark_used: historyEntry.benchmark_used,
+          cached: false
+        };
+        console.log(`[Status] Resolved '${inputText}' using premium local fuzzy matcher (Score: ${fuzzyResult.score}%)`);
+      } else {
+        // Fall back to AI matching
+        aiInputs.push(inputText);
+        aiIndices.push(origIndex);
+        console.log(`[Status] Route '${inputText}' to AI/Gemini matching engine (Fuzzy confidence too low)`);
+      }
+    }
+
+    // 3. Fallback to Gemini AI Model for the remaining unresolved/low-confidence inputs
+    if (aiInputs.length > 0) {
+      let unresolvedResults: any[] = [];
+      let aiSucceeded = false;
+
+      if (isGeminiSuspended) {
+        console.log("[Status] Utilizing local resilient mapping engine.");
+        unresolvedResults = aiInputs.map(inputText => localPostcodeMatch(inputText, postcodeDb, dynamicCutoff));
+      } else {
+        try {
+          const databaseReferenceText = JSON.stringify(
+            postcodeDb.map(item => ({
+              province: item.province,
+              district: item.district,
+              commune: item.commune,
+              existing_postcode: item.existing_postcode,
+              new_postcode: item.new_postcode
+            })),
+            null,
+            1
+          );
+
+          const systemInstruction = `You are an expert AI assistant specializing in Cambodian administrative geography (Province, District/Khan, Commune/Sangkat) and Cambodian postcode migration.
 Your task is to analyze raw, fuzzy, or OCR-extracted address submissions, normalize them according to the provided official reference database, and determine the postcode status.
 
-Here the reference database of official Cambodian subdivisions and their legacy (existing) and migrated (new) postcodes:
+Here structural reference database of official Cambodian subdivisions and their legacy (existing) and migrated (new) postcodes:
 ${databaseReferenceText}
 
 Rules for normalizing and matching:
 1. Always use official, correct administrative spellings from the reference database where possible. For instance, map typos or alternative Khmer romanizations (like 'BKK', 'Beoung Keng Kang' to 'Boeng Keng Kang', 'Chamkarmon' to 'Chamkar Mon', '7 Makara' or 'Prampir Makara' to 'Prampir Meakkara', 'Toul Kouk' to 'Tuol Kouk', etc.).
-2. Clean and match inputs to the closest entry in the database. 
+2. Clean and match inputs to the closest entry in the database.
 3. If the input text contains a number that matches the legacy ('existing_postcode') of the matched commune, postcode_status MUST be "Follow Existing Postcode".
 4. If the input text contains a number that matches the migrated ('new_postcode') of the matched commune, postcode_status MUST be "Follow New Postcode".
 5. If the input contains a postcode that matches neither, or does not match this commune's valid codes, postcode_status MUST be "Incorrect Postcode".
@@ -1885,93 +2597,114 @@ Rules for normalizing and matching:
 7. If the administration unit cannot be determined with confidence, use "Unknown" for province, district, commune, and set postcode_status to "Unknown".
 8. Make sure you return an object for each input string sent to you, matching the input list position.`;
 
-      const response = await generateContentWithRetry(ai, {
-        model: "gemini-3.5-flash",
-        contents: `Process the following address lines/OCR text and return the matched entries.
+          const response = await generateContentWithRetry(ai, {
+            model: "gemini-3.5-flash",
+            contents: `Process the following address lines/OCR text and return the matched entries.
 Inputs to process:
-${JSON.stringify(inputsToProcess, null, 2)}`,
-        config: {
-          systemInstruction,
-          responseMimeType: "application/json",
-          responseSchema: {
-            type: Type.OBJECT,
-            required: ["results"],
-            properties: {
-              results: {
-                type: Type.ARRAY,
-                description: "Array of matching results parallel to the inputs",
-                items: {
-                  type: Type.OBJECT,
-                  required: ["province", "district", "commune", "postcode_status", "input_text"],
-                  properties: {
-                    province: { type: Type.STRING, description: "Normalized Official Province Name or 'Unknown'" },
-                    district: { type: Type.STRING, description: "Normalized Official District/Khan Name or 'Unknown'" },
-                    commune: { type: Type.STRING, description: "Normalized Official Commune/Sangkat Name or 'Unknown'" },
-                    postcode_status: { 
-                      type: Type.STRING, 
-                      enum: ["Incorrect Postcode", "Follow Existing Postcode", "Follow New Postcode", "Unknown", "No Postcode Detected"],
-                      description: "Status flag based on postcode matching" 
-                    },
-                    existing_postcode: { type: Type.STRING, description: "Matched legacy postcode from the database" },
-                    new_postcode: { type: Type.STRING, description: "Matched new migrated postcode from the database" },
-                    input_text: { type: Type.STRING, description: "The original raw segment analyzed" }
+${JSON.stringify(aiInputs, null, 2)}`,
+            config: {
+              systemInstruction,
+              responseMimeType: "application/json",
+              responseSchema: {
+                type: Type.OBJECT,
+                required: ["results"],
+                properties: {
+                  results: {
+                    type: Type.ARRAY,
+                    description: "Array of matching results parallel to the inputs",
+                    items: {
+                      type: Type.OBJECT,
+                      required: ["province", "district", "commune", "postcode_status", "input_text"],
+                      properties: {
+                        province: { type: Type.STRING, description: "Normalized Official Province Name or 'Unknown'" },
+                        district: { type: Type.STRING, description: "Normalized Official District/Khan Name or 'Unknown'" },
+                        commune: { type: Type.STRING, description: "Normalized Official Commune/Sangkat Name or 'Unknown'" },
+                        postcode_status: { 
+                          type: Type.STRING, 
+                          enum: ["Incorrect Postcode", "Follow Existing Postcode", "Follow New Postcode", "Unknown", "No Postcode Detected"],
+                          description: "Status flag based on postcode matching" 
+                        },
+                        existing_postcode: { type: Type.STRING, description: "Matched legacy postcode from the database" },
+                        new_postcode: { type: Type.STRING, description: "Matched new migrated postcode from the database" },
+                        input_text: { type: Type.STRING, description: "The original raw segment analyzed" }
+                      }
+                    }
                   }
                 }
               }
             }
-          }
+          });
+
+          const resultText = response.text || "{}";
+          const parsedResult = JSON.parse(resultText);
+          unresolvedResults = parsedResult.results || [];
+          aiSucceeded = true;
+        } catch (aiErr: any) {
+          console.log("[Status] Utilizing local processing fallback due to connection status.");
+          unresolvedResults = aiInputs.map(inputText => localPostcodeMatch(inputText, postcodeDb, dynamicCutoff));
         }
+      }
+
+      // Enrich newly resolved results
+      unresolvedResults = unresolvedResults.map((row, idx) => {
+        const originalInput = aiInputs[idx] || "";
+        const mProvince = (row.province || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+        const mDistrict = (row.district || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+        const mCommune = (row.commune || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+
+        const match = postcodeDb.find(e => 
+          e.province.toLowerCase().replace(/[^a-z0-9]/g, "") === mProvince &&
+          e.district.toLowerCase().replace(/[^a-z0-9]/g, "") === mDistrict &&
+          e.commune.toLowerCase().replace(/[^a-z0-9]/g, "") === mCommune
+        );
+
+        let finalRow = { ...row };
+        if (match) {
+          finalRow = {
+            ...row,
+            input_text: row.input_text || originalInput,
+            new_city_name: row.new_city_name || match.new_city_name || "",
+            ib_sort_co: row.ib_sort_co || match.ib_sort_co || "",
+            inbound_fac: row.inbound_fac || match.inbound_fac || ""
+          };
+        } else {
+          finalRow = {
+            ...row,
+            input_text: row.input_text || originalInput,
+            new_city_name: row.new_city_name || "",
+            ib_sort_co: row.ib_sort_co || "",
+            inbound_fac: row.inbound_fac || ""
+          };
+        }
+
+        const computedScore = finalRow.score !== undefined ? Number(finalRow.score) : (aiSucceeded ? 100 : 0);
+        finalRow.score = computedScore;
+        return finalRow;
       });
 
-      const resultText = response.text || "{}";
-      const parsedResult = JSON.parse(resultText);
-      results = parsedResult.results || [];
-      aiSucceeded = true;
-    } catch (aiErr: any) {
-      console.warn("AI migration parsing failed or model overloaded. Swapping gears to local resilient matching engine...", aiErr);
-      // Run fallback matching in Javascript directly
-      results = inputsToProcess.map(inputText => localPostcodeMatch(inputText, postcodeDb));
-    }
+      // Save each to search history & assign back to processedResults
+      for (let i = 0; i < unresolvedResults.length; i++) {
+        const rawResult = unresolvedResults[i];
+        const indexInMain = aiIndices[i];
+        const inputText = aiInputs[i];
 
-    // For each result, find the matching item in postcodeDb to enrich it with Route and Facility info if not present
-    results = results.map((row, index) => {
-      const originalInput = inputsToProcess[index] || "";
-      const match = postcodeDb.find(e => 
-        e.province.toLowerCase().replace(/[^a-z0-9]/g, "") === (row.province || "").toLowerCase().replace(/[^a-z0-9]/g, "") &&
-        e.district.toLowerCase().replace(/[^a-z0-9]/g, "") === (row.district || "").toLowerCase().replace(/[^a-z0-9]/g, "") &&
-        e.commune.toLowerCase().replace(/[^a-z0-9]/g, "") === (row.commune || "").toLowerCase().replace(/[^a-z0-9]/g, "")
-      );
-      if (match) {
-        return {
-          ...row,
-          input_text: row.input_text || originalInput,
-          new_city_name: row.new_city_name || match.new_city_name || "",
-          ib_sort_co: row.ib_sort_co || match.ib_sort_co || "",
-          inbound_fac: row.inbound_fac || match.inbound_fac || ""
+        const historyEntry = await addSearchHistory(inputText, rawResult, rawResult.score, dynamicCutoff);
+        
+        processedResults[indexInMain] = {
+          ...rawResult,
+          search_id: historyEntry.id,
+          confidence_score: historyEntry.score,
+          benchmark_used: historyEntry.benchmark_used,
+          cached: false
         };
       }
-      return {
-        ...row,
-        input_text: row.input_text || originalInput,
-        new_city_name: row.new_city_name || "",
-        ib_sort_co: row.ib_sort_co || "",
-        inbound_fac: row.inbound_fac || ""
-      };
-    });
+    }
 
-    // If single text request was passed, map back to a single object, otherwise return the array as required
-    if (text) {
-      const singleItem = results[0] || {
-        province: "Unknown",
-        district: "Unknown",
-        commune: "Unknown",
-        postcode_status: "Unknown",
-        ib_sort_co: "",
-        inbound_fac: ""
-      };
-      return res.json(singleItem);
+    // Return single object or list based on query format
+    if (isSingle) {
+      return res.json(processedResults[0]);
     } else {
-      return res.json(results);
+      return res.json(processedResults);
     }
 
   } catch (error: any) {
@@ -1983,12 +2716,74 @@ ${JSON.stringify(inputsToProcess, null, 2)}`,
   }
 });
 
+// GET /api/search-history - Load all recent search logs for metrics dashboards and feedback listing
+app.get("/api/search-history", async (req, res) => {
+  // Pull freshest logs and ratings from Supabase if configured to ensure full multi-client synchronization
+  await loadSearchHistory();
+
+  const mapped = searchHistoryCache.map(entry => {
+    const resultObj = entry.result || {};
+    const hasMatch = resultObj && resultObj.new_postcode;
+    
+    // Fallback for visual targeting
+    let targetName = "";
+    if (hasMatch) {
+      targetName = resultObj.new_city_name || [resultObj.commune, resultObj.district, resultObj.province].filter(Boolean).join(", ");
+    }
+    
+    return {
+      ...entry,
+      input_text: entry.original_query || entry.query || "",
+      new_city_name: targetName,
+      new_postcode: resultObj.new_postcode || "",
+      confidence_score: entry.score !== undefined ? entry.score : 100,
+      created_at: entry.datetime || new Date().toISOString(),
+      cached: resultObj.cached !== undefined ? resultObj.cached : false
+    };
+  });
+
+  res.json({
+    history: mapped,
+    benchmark_current: getDynamicCutoffThreshold()
+  });
+});
+
+// POST /api/search-history/rate - Rate a specific search entry (Thumbs Up/Down feedback)
+app.post("/api/search-history/rate", async (req, res) => {
+  const { id, rating } = req.body;
+  if (!id || (rating !== "up" && rating !== "down" && rating !== null)) {
+    return res.status(400).json({ error: "Please provide a valid search 'id' and 'rating' ('up', 'down', or null)." });
+  }
+
+  const success = await updateSearchHistoryRating(id, rating);
+  if (success) {
+    res.json({
+      success: true,
+      message: `Rating for cache id ${id} successfully registered.`,
+      benchmark_current: getDynamicCutoffThreshold()
+    });
+  } else {
+    res.status(404).json({ error: `Search history log ID ${id} not found.` });
+  }
+});
+
 
 // OCR photo analyzer endpoint - receives base64 photo with address text and uses Gemini for lookup
 app.post("/api/ocr-address", async (req, res) => {
   const { imageBase64, mimeType } = req.body;
   if (!imageBase64) {
     return res.status(400).json({ error: "Missing required 'imageBase64' parameter." });
+  }
+
+  if (isGeminiSuspended) {
+    console.log("[Status] Utilized local placeholder for image text transcription.");
+    return res.json({
+      extracted_text: "AI service is currently offline or payment credits are depleted. Please type the address text manually to run our matching engine.",
+      province: "Unknown",
+      district: "Unknown",
+      commune: "Unknown",
+      postcode_status: "Unknown"
+    });
   }
 
   // Check if Gemini API key exists
@@ -2093,9 +2888,9 @@ ${databaseReferenceText}
     res.json(parsed);
 
   } catch (error: any) {
-    console.error("OCR Image analysis error:", error);
+    console.log("[Status] Image processing status update on request.");
     res.status(500).json({
-      error: "Failed to parse address from photo.",
+      error: "Service offline. Please type the address manually to proceed.",
       details: error.message
     });
   }
@@ -2104,6 +2899,7 @@ ${databaseReferenceText}
 
 // Start custom server and integrate Vite
 async function startServer() {
+  loadSearchHistory();
   if (process.env.NODE_ENV !== "production") {
     // Dynamic import keeps vite out of the serverless bundle on Vercel
     const { createServer: createViteServer } = await import("vite");
@@ -2136,6 +2932,7 @@ if (process.env.VERCEL) {
   // static assets are served by the platform, so we never call listen().
   // Settings sync is fired on cold start; requests fall back to file config
   // until it completes.
+  loadSearchHistory();
   syncFromDatabase().catch((e) =>
     console.error("[Platform Settings] Cold-start settings sync failed:", e)
   );

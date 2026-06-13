@@ -2,7 +2,7 @@
   "supabaseUrl": "https://infyhysprcmddoulbnhb.supabase.co",
   "supabaseKey": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImluZnloeXNwcmNtZGRvdWxibmhiIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODExNzA1NDAsImV4cCI6MjA5Njc0NjU0MH0.M2F53bmPBsMXECt1olQ2SL1xx6CWu3_kmtxVPS_-KDI",
   "supabaseTableName": "cambodia_postcode_migration",
-  "geminiKey": "AQ.Ab8RN6Ip1Lc9W969SUa49-fDEIpmx4yLev7O1qFO_siDOQ4Q3A",
+  "geminiKey": "",
   "geminiVersion": "gemini-3.5-flash",
   "googleMapsKey": "AIzaSyCtVS-AMDfi4_mjjJa4fCj1zv77w-SHpEI",
   "googleMapsId": "DEMO_MAP_ID",
