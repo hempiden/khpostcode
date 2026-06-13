@@ -264,7 +264,7 @@ const localPostcodeMatch = (inputText: string, db: PostcodeEntry[]): MigrationRe
       postcode_status: "Unknown",
       existing_postcode: "",
       new_postcode: "",
-      score: bestScore,
+      score: 0,
       input_text: inputText
     };
   }
@@ -294,7 +294,7 @@ const localPostcodeMatch = (inputText: string, db: PostcodeEntry[]): MigrationRe
     ib_sort_co: bestEntry.ib_sort_co || "",
     inbound_fac: bestEntry.inbound_fac || "",
     new_city_name: bestEntry.new_city_name || "",
-    score: bestScore,
+    score: Math.max(50, bestScore),
     input_text: inputText
   };
 };
@@ -390,7 +390,7 @@ const fuzzyMatchGeocodedAddress = (
       inbound_fac: bestEntry.inbound_fac || "",
       new_city_name: bestEntry.new_city_name || "",
       input_text: originalInputText,
-      score: bestScore
+      score: Math.max(50, bestScore)
     };
   }
 
@@ -453,12 +453,13 @@ ${databaseReferenceText}
 Rules for normalizing and matching:
 1. Always use official, correct administrative spellings from the reference database where possible. For instance, map typos or alternative Khmer romanizations (like 'BKK', 'Beoung Keng Kang' to 'Boeng Keng Kang', 'Chamkar Mon' to 'Chamkar Mon', '7 Makara' or 'Prampir Makara' to 'Prampir Meakkara', 'Toul Kouk' to 'Tuol Kouk', etc.).
 2. Clean and match inputs to the closest entry in the database. 
-3. If the input text contains a number that matches the legacy ('existing_postcode') of the matched commune, postcode_status MUST be "Follow Existing Postcode".
-4. If the input text contains a number that matches the migrated ('new_postcode') of the matched commune, postcode_status MUST be "Follow New Postcode".
-5. If the input contains a postcode that matches neither, or does not match this commune's valid codes, postcode_status MUST be "Incorrect Postcode".
-6. If the input text contains NO postcode (no 5-digit or 6-digit numeric postal code, e.g. just raw place and address names), postcode_status MUST be "No Postcode Detected".
-7. If the administration unit cannot be determined with confidence, use "Unknown" for province, district, commune, and set postcode_status to "Unknown".
-8. Make sure you return an object for each input string sent to you, matching the input list position.`;
+3. For Famous Landmarks and Points of Interest: If the raw address or input text contains a well-known building, landmark, company, school, hospital, temple, or shopping mall in Cambodia (such as "Chip Mong 271 Mega Mall", "Chipmong 271", "Aeon Mall 3", "NagaWorld", "Olympic Stadium", "ITC", "Calmette Hospital", etc.) rather than a structured street address, first use your extensive world knowledge to identify the physical Sangkat (Commune), Khan (District), and Province/Capital where this establishment is located. Once identified, map those geographical units to the closest matching official entry in the provided structural database.
+4. If the input text contains a number that matches the legacy ('existing_postcode') of the matched commune, postcode_status MUST be "Follow Existing Postcode".
+5. If the input text contains a number that matches the migrated ('new_postcode') of the matched commune, postcode_status MUST be "Follow New Postcode".
+6. If the input contains a postcode that matches neither, or does not match this commune's valid codes, postcode_status MUST be "Incorrect Postcode".
+7. If the input text contains NO postcode (no 5-digit or 6-digit numeric postal code, e.g. just raw place and address names), postcode_status MUST be "No Postcode Detected".
+8. If the administration unit cannot be determined with confidence, use "Unknown" for province, district, commune, and set postcode_status to "Unknown".
+9. Make sure you return an object for each input string sent to you, matching the input list position.`;
 
   const payload = {
     contents: {
@@ -551,12 +552,13 @@ ${databaseReferenceText}
 Rules for normalizing and matching:
 1. Always use official, correct administrative spellings from the reference database where possible. For instance, map typos or alternative Khmer romanizations (like 'BKK', 'Beoung Keng Kang' to 'Boeng Keng Kang', 'Chamkar Mon' to 'Chamkar Mon', '7 Makara' or 'Prampir Makara' to 'Prampir Meakkara', 'Toul Kouk' to 'Tuol Kouk', etc.).
 2. Clean and match inputs to the closest entry in the database. 
-3. If the input text contains a number that matches the legacy ('existing_postcode') of the matched commune, postcode_status MUST be "Follow Existing Postcode".
-4. If the input text contains a number that matches the migrated ('new_postcode') of the matched commune, postcode_status MUST be "Follow New Postcode".
-5. If the input contains a postcode that matches neither, or does not match this commune's valid codes, postcode_status MUST be "Incorrect Postcode".
-6. If the input text contains NO postcode (no 5-digit or 6-digit numeric postal code, e.g. just raw place and address names), postcode_status MUST be "No Postcode Detected".
-7. If the administration unit cannot be determined with confidence, use "Unknown" for province, district, commune, and set postcode_status to "Unknown".
-8. Make sure you return an object for each input string sent to you, matching the input list position.`;
+3. For Famous Landmarks and Points of Interest: If the raw address or input text contains a well-known building, landmark, company, school, hospital, temple, or shopping mall in Cambodia (such as "Chip Mong 271 Mega Mall", "Chipmong 271", "Aeon Mall 3", "NagaWorld", "Olympic Stadium", "ITC", "Calmette Hospital", etc.) rather than a structured street address, first use your extensive world knowledge to identify the physical Sangkat (Commune), Khan (District), and Province/Capital where this establishment is located. Once identified, map those geographical units to the closest matching official entry in the provided structural database.
+4. If the input text contains a number that matches the legacy ('existing_postcode') of the matched commune, postcode_status MUST be "Follow Existing Postcode".
+5. If the input text contains a number that matches the migrated ('new_postcode') of the matched commune, postcode_status MUST be "Follow New Postcode".
+6. If the input contains a postcode that matches neither, or does not match this commune's valid codes, postcode_status MUST be "Incorrect Postcode".
+7. If the input text contains NO postcode (no 5-digit or 6-digit numeric postal code, e.g. just raw place and address names), postcode_status MUST be "No Postcode Detected".
+8. If the administration unit cannot be determined with confidence, use "Unknown" for province, district, commune, and set postcode_status to "Unknown".
+9. Make sure you return an object for each input string sent to you, matching the input list position.`;
 
   const payload = {
     contents: {
@@ -1394,20 +1396,50 @@ ON CONFLICT (email) DO NOTHING;`;
             const geoData = await response.json();
             if (geoData.status === "OK" && geoData.results && geoData.results[0]) {
               const firstResult = geoData.results[0];
-              let gProvince = "";
-              let gDistrict = "";
-              let gCommune = "";
+              let compProvince = "";
+              let compAdmin2 = "";
+              let compLocality = "";
+              let compSublocality1 = "";
+              let compSublocality = "";
+              let compAdmin3 = "";
+              let compNeighborhood = "";
 
               firstResult.address_components.forEach((comp: any) => {
                 const types = comp.types || [];
                 if (types.includes("administrative_area_level_1")) {
-                  gProvince = comp.long_name;
-                } else if (types.includes("administrative_area_level_2") || types.includes("locality")) {
-                  gDistrict = comp.long_name;
-                } else if (types.includes("sublocality_level_1") || types.includes("neighborhood") || types.includes("administrative_area_level_3")) {
-                  gCommune = comp.long_name;
+                  compProvince = comp.long_name;
+                }
+                if (types.includes("administrative_area_level_2")) {
+                  compAdmin2 = comp.long_name;
+                }
+                if (types.includes("locality")) {
+                  compLocality = comp.long_name;
+                }
+                if (types.includes("sublocality_level_1")) {
+                  compSublocality1 = comp.long_name;
+                }
+                if (types.includes("sublocality")) {
+                  compSublocality = comp.long_name;
+                }
+                if (types.includes("administrative_area_level_3")) {
+                  compAdmin3 = comp.long_name;
+                }
+                if (types.includes("neighborhood")) {
+                  compNeighborhood = comp.long_name;
                 }
               });
+
+              let gProvince = compProvince;
+              let gDistrict = "";
+              if (compAdmin2) {
+                gDistrict = compAdmin2;
+              } else if (compLocality && compLocality.toLowerCase() !== compProvince.toLowerCase() && !compLocality.toLowerCase().includes("phnom penh")) {
+                gDistrict = compLocality;
+              } else {
+                gDistrict = compLocality || "";
+              }
+
+              let gCommune = compSublocality1 || compSublocality || compAdmin3 || compNeighborhood || "";
 
               const matchedGeocoded = fuzzyMatchGeocodedAddress(
                 gProvince,
@@ -2247,20 +2279,50 @@ ON CONFLICT (email) DO NOTHING;`;
             const geoData = await geoRes.json();
             if (geoData.status === "OK" && geoData.results && geoData.results[0]) {
               const firstResult = geoData.results[0];
-              let gProvince = "";
-              let gDistrict = "";
-              let gCommune = "";
+              let compProvince = "";
+              let compAdmin2 = "";
+              let compLocality = "";
+              let compSublocality1 = "";
+              let compSublocality = "";
+              let compAdmin3 = "";
+              let compNeighborhood = "";
 
               firstResult.address_components.forEach((comp: any) => {
                 const types = comp.types || [];
                 if (types.includes("administrative_area_level_1")) {
-                  gProvince = comp.long_name;
-                } else if (types.includes("administrative_area_level_2") || types.includes("locality")) {
-                  gDistrict = comp.long_name;
-                } else if (types.includes("sublocality_level_1") || types.includes("sublocality") || types.includes("neighborhood") || types.includes("administrative_area_level_3")) {
-                  gCommune = comp.long_name;
+                  compProvince = comp.long_name;
+                }
+                if (types.includes("administrative_area_level_2")) {
+                  compAdmin2 = comp.long_name;
+                }
+                if (types.includes("locality")) {
+                  compLocality = comp.long_name;
+                }
+                if (types.includes("sublocality_level_1")) {
+                  compSublocality1 = comp.long_name;
+                }
+                if (types.includes("sublocality")) {
+                  compSublocality = comp.long_name;
+                }
+                if (types.includes("administrative_area_level_3")) {
+                  compAdmin3 = comp.long_name;
+                }
+                if (types.includes("neighborhood")) {
+                  compNeighborhood = comp.long_name;
                 }
               });
+
+              let gProvince = compProvince;
+              let gDistrict = "";
+              if (compAdmin2) {
+                gDistrict = compAdmin2;
+              } else if (compLocality && compLocality.toLowerCase() !== compProvince.toLowerCase() && !compLocality.toLowerCase().includes("phnom penh")) {
+                gDistrict = compLocality;
+              } else {
+                gDistrict = compLocality || "";
+              }
+
+              let gCommune = compSublocality1 || compSublocality || compAdmin3 || compNeighborhood || "";
 
               const matchedGeocoded = fuzzyMatchGeocodedAddress(gProvince, gDistrict, gCommune, postcodes, text);
               if (matchedGeocoded) {
@@ -2293,11 +2355,13 @@ ON CONFLICT (email) DO NOTHING;`;
           const result = await callGeminiDirectly(text, postcodes, clientGeminiKey, clientModel);
           if (result) {
             const enriched = enrichResultLocally(result, postcodes);
-            const searchId = await logSearchClientSide(text, enriched, 100);
+            const isUnknown = !enriched.province || enriched.province.toLowerCase() === "unknown";
+            const scoreToUse = isUnknown ? 0 : 100;
+            const searchId = await logSearchClientSide(text, enriched, scoreToUse);
             setSingleResult({
               ...enriched,
               search_id: searchId || "local_sh_" + Date.now(),
-              confidence_score: 100,
+              confidence_score: scoreToUse,
               benchmark_used: 50,
               cached: false
             });
@@ -2387,20 +2451,50 @@ ON CONFLICT (email) DO NOTHING;`;
                 const geoData = await geoRes.json();
                 if (geoData.status === "OK" && geoData.results && geoData.results[0]) {
                   const firstResult = geoData.results[0];
-                  let gProvince = "";
-                  let gDistrict = "";
-                  let gCommune = "";
+                  let compProvince = "";
+                  let compAdmin2 = "";
+                  let compLocality = "";
+                  let compSublocality1 = "";
+                  let compSublocality = "";
+                  let compAdmin3 = "";
+                  let compNeighborhood = "";
 
                   firstResult.address_components.forEach((comp: any) => {
                     const types = comp.types || [];
                     if (types.includes("administrative_area_level_1")) {
-                      gProvince = comp.long_name;
-                    } else if (types.includes("administrative_area_level_2") || types.includes("locality")) {
-                      gDistrict = comp.long_name;
-                    } else if (types.includes("sublocality_level_1") || types.includes("sublocality") || types.includes("neighborhood") || types.includes("administrative_area_level_3")) {
-                      gCommune = comp.long_name;
+                      compProvince = comp.long_name;
+                    }
+                    if (types.includes("administrative_area_level_2")) {
+                      compAdmin2 = comp.long_name;
+                    }
+                    if (types.includes("locality")) {
+                      compLocality = comp.long_name;
+                    }
+                    if (types.includes("sublocality_level_1")) {
+                      compSublocality1 = comp.long_name;
+                    }
+                    if (types.includes("sublocality")) {
+                      compSublocality = comp.long_name;
+                    }
+                    if (types.includes("administrative_area_level_3")) {
+                      compAdmin3 = comp.long_name;
+                    }
+                    if (types.includes("neighborhood")) {
+                      compNeighborhood = comp.long_name;
                     }
                   });
+
+                  let gProvince = compProvince;
+                  let gDistrict = "";
+                  if (compAdmin2) {
+                    gDistrict = compAdmin2;
+                  } else if (compLocality && compLocality.toLowerCase() !== compProvince.toLowerCase() && !compLocality.toLowerCase().includes("phnom penh")) {
+                    gDistrict = compLocality;
+                  } else {
+                    gDistrict = compLocality || "";
+                  }
+
+                  let gCommune = compSublocality1 || compSublocality || compAdmin3 || compNeighborhood || "";
 
                   const matchedGeocoded = fuzzyMatchGeocodedAddress(gProvince, gDistrict, gCommune, postcodes, rowText);
                   if (matchedGeocoded) {
@@ -2466,11 +2560,13 @@ ON CONFLICT (email) DO NOTHING;`;
             // Log each element client-side in parallel to Supabase
             const savedResults = await Promise.all(enrichedResults.map(async (row, idx) => {
               const inputText = rowsArray[idx] || "";
-              const searchId = await logSearchClientSide(inputText, row, 100);
+              const isUnknown = !row.province || row.province.toLowerCase() === "unknown";
+              const scoreToUse = isUnknown ? 0 : 100;
+              const searchId = await logSearchClientSide(inputText, row, scoreToUse);
               return {
                 ...row,
                 search_id: searchId || "local_sh_" + Date.now() + "_" + idx,
-                confidence_score: 100,
+                confidence_score: scoreToUse,
                 benchmark_used: 50,
                 cached: false
               };

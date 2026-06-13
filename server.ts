@@ -913,20 +913,50 @@ async function geocodeAddressWithGoogle(
       const data = await res.json();
       if (data.status === "OK" && data.results && data.results[0]) {
         const firstResult = data.results[0];
-        let gProvince = "";
-        let gDistrict = "";
-        let gCommune = "";
+        let compProvince = "";
+        let compAdmin2 = "";
+        let compLocality = "";
+        let compSublocality1 = "";
+        let compSublocality = "";
+        let compAdmin3 = "";
+        let compNeighborhood = "";
 
         firstResult.address_components.forEach((comp: any) => {
           const types = comp.types || [];
           if (types.includes("administrative_area_level_1")) {
-            gProvince = comp.long_name;
-          } else if (types.includes("administrative_area_level_2") || types.includes("locality")) {
-            gDistrict = comp.long_name;
-          } else if (types.includes("sublocality_level_1") || types.includes("sublocality") || types.includes("neighborhood") || types.includes("administrative_area_level_3")) {
-            gCommune = comp.long_name;
+            compProvince = comp.long_name;
+          }
+          if (types.includes("administrative_area_level_2")) {
+            compAdmin2 = comp.long_name;
+          }
+          if (types.includes("locality")) {
+            compLocality = comp.long_name;
+          }
+          if (types.includes("sublocality_level_1")) {
+            compSublocality1 = comp.long_name;
+          }
+          if (types.includes("sublocality")) {
+            compSublocality = comp.long_name;
+          }
+          if (types.includes("administrative_area_level_3")) {
+            compAdmin3 = comp.long_name;
+          }
+          if (types.includes("neighborhood")) {
+            compNeighborhood = comp.long_name;
           }
         });
+
+        let gProvince = compProvince;
+        let gDistrict = "";
+        if (compAdmin2) {
+          gDistrict = compAdmin2;
+        } else if (compLocality && compLocality.toLowerCase() !== compProvince.toLowerCase() && !compLocality.toLowerCase().includes("phnom penh")) {
+          gDistrict = compLocality;
+        } else {
+          gDistrict = compLocality || "";
+        }
+
+        let gCommune = compSublocality1 || compSublocality || compAdmin3 || compNeighborhood || "";
 
         return {
           province: gProvince,
@@ -1033,7 +1063,7 @@ function fuzzyMatchGeocodedAddress(
       new_city_name: bestEntry.new_city_name || "",
       ib_sort_co: bestEntry.ib_sort_co || "",
       inbound_fac: bestEntry.inbound_fac || "",
-      score: bestScore
+      score: Math.max(50, bestScore)
     };
   }
 
@@ -1154,7 +1184,7 @@ function normalizedFuzzyMatch(inputText: string, db: PostcodeEntry[]): any {
     new_city_name: bestEntry.new_city_name || "",
     ib_sort_co: bestEntry.ib_sort_co || "",
     inbound_fac: bestEntry.inbound_fac || "",
-    score: Math.round(bestScore * 100), // Map 0.0 - 1.0 -> 0 - 100 for visual consistency
+    score: Math.max(50, Math.round(bestScore * 100)), // Map 0.0 - 1.0 -> 0 - 100 for visual consistency, minimum score 50 on successful match
     input_text: inputText
   };
 }
@@ -1332,7 +1362,7 @@ function localPostcodeMatch(inputText: string, db: PostcodeEntry[], cutoffOverri
       postcode_status: "Unknown",
       existing_postcode: "",
       new_postcode: "",
-      score: bestScore,
+      score: 0,
       input_text: inputText
     };
   }
@@ -1361,7 +1391,7 @@ function localPostcodeMatch(inputText: string, db: PostcodeEntry[], cutoffOverri
     new_postcode: bestEntry.new_postcode || "",
     ib_sort_co: bestEntry.ib_sort_co || "",
     inbound_fac: bestEntry.inbound_fac || "",
-    score: bestScore,
+    score: Math.max(50, bestScore),
     input_text: inputText
   };
 }
@@ -2828,12 +2858,13 @@ ${databaseReferenceText}
 Rules for normalizing and matching:
 1. Always use official, correct administrative spellings from the reference database where possible. For instance, map typos or alternative Khmer romanizations (like 'BKK', 'Beoung Keng Kang' to 'Boeng Keng Kang', 'Chamkarmon' to 'Chamkar Mon', '7 Makara' or 'Prampir Makara' to 'Prampir Meakkara', 'Toul Kouk' to 'Tuol Kouk', etc.).
 2. Clean and match inputs to the closest entry in the database.
-3. If the input text contains a number that matches the legacy ('existing_postcode') of the matched commune, postcode_status MUST be "Follow Existing Postcode".
-4. If the input text contains a number that matches the migrated ('new_postcode') of the matched commune, postcode_status MUST be "Follow New Postcode".
-5. If the input contains a postcode that matches neither, or does not match this commune's valid codes, postcode_status MUST be "Incorrect Postcode".
-6. If the input text contains NO postcode (no 5-digit or 6-digit numeric postal code, e.g. just raw place and address names), postcode_status MUST be "No Postcode Detected".
-7. If the administration unit cannot be determined with confidence, use "Unknown" for province, district, commune, and set postcode_status to "Unknown".
-8. Make sure you return an object for each input string sent to you, matching the input list position.`;
+3. For Famous Landmarks and Points of Interest: If the raw address or input text contains a well-known building, landmark, company, school, hospital, temple, or shopping mall in Cambodia (such as "Chip Mong 271 Mega Mall", "Chipmong 271", "Aeon Mall 3", "NagaWorld", "Olympic Stadium", "ITC", "Calmette Hospital", etc.) rather than a structured street address, first use your extensive world knowledge to identify the physical Sangkat (Commune), Khan (District), and Province/Capital where this establishment is located. Once identified, map those geographical units to the closest matching official entry in the provided structural database.
+4. If the input text contains a number that matches the legacy ('existing_postcode') of the matched commune, postcode_status MUST be "Follow Existing Postcode".
+5. If the input text contains a number that matches the migrated ('new_postcode') of the matched commune, postcode_status MUST be "Follow New Postcode".
+6. If the input contains a postcode that matches neither, or does not match this commune's valid codes, postcode_status MUST be "Incorrect Postcode".
+7. If the input text contains NO postcode (no 5-digit or 6-digit numeric postal code, e.g. just raw place and address names), postcode_status MUST be "No Postcode Detected".
+8. If the administration unit cannot be determined with confidence, use "Unknown" for province, district, commune, and set postcode_status to "Unknown".
+9. Make sure you return an object for each input string sent to you, matching the input list position.`;
 
           const response = await generateContentWithRetry(ai, {
             model: "gemini-3.5-flash",
@@ -2915,7 +2946,8 @@ ${JSON.stringify(aiInputs, null, 2)}`,
           };
         }
 
-        const computedScore = finalRow.score !== undefined ? Number(finalRow.score) : (aiSucceeded ? 100 : 0);
+        const isUnknown = !finalRow.province || finalRow.province.toLowerCase() === "unknown";
+        const computedScore = isUnknown ? 0 : (finalRow.score !== undefined ? Number(finalRow.score) : (aiSucceeded ? 100 : 0));
         finalRow.score = computedScore;
         return finalRow;
       });
@@ -3067,12 +3099,13 @@ Analyze the provided image which contains an address label, shipping invoice, en
 2. Resolve the geographic location to the correct, official Cambodian subdivisions (Province, District/Khan, Commune/Sangkat) using the provided official reference dataset:
 ${databaseReferenceText}
 3. Correct any typical misspellings, abbreviations (e.g. 'BKK' -> 'Boeng Keng Kang', 'BKK1' -> 'Boeng Keng Kang I', 'Chamkarmon' -> 'Chamkar Mon') and match the best commune.
-4. Detect the legacy zip code or new postcode written in the text and match it with the database's existing_postcode or new_postcode for the resolved commune:
+4. For Famous Landmarks and Points of Interest: If the visible address on the label references a well-known building, landmark, company, hospital, temple, or shopping center (such as "Chip Mong 271 Mega Mall", "Chipmong 271", "Aeon Mall", "Olympic Stadium", etc.) without naming the Sangkat or Khan, use your extensive world knowledge to first place that landmark into its corresponding physical Sangkat, Khan, and Province, then align it with the reference database.
+5. Detect the legacy zip code or new postcode written in the text and match it with the database's existing_postcode or new_postcode for the resolved commune:
    - If the postcode on the label matches 'existing_postcode', status must be "Follow Existing Postcode".
    - If the postcode on the label matches 'new_postcode', status must be "Follow New Postcode".
    - If a mismatch is found or is completely wrong, status must be "Incorrect Postcode".
    - If no postcode is found, status must be "No Postcode Detected".
-5. Return a structured JSON containing the OCR-extracted text and normalized geographic mappings. Do not include markdown code block characters around the JSON, respond inside the JSON schema format.`;
+6. Return a structured JSON containing the OCR-extracted text and normalized geographic mappings. Do not include markdown code block characters around the JSON, respond inside the JSON schema format.`;
 
     const imagePart = {
       inlineData: {
