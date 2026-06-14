@@ -1,10 +1,15 @@
 import express from "express";
 import path from "path";
 import fs from "fs";
+import { fileURLToPath } from "url";
 import { GoogleGenAI, Type } from "@google/genai";
 import dotenv from "dotenv";
 
 dotenv.config();
+
+// Resolve ES module path globals
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 // Define postcode entry type
 interface PostcodeEntry {
@@ -588,6 +593,30 @@ function isContiguousMatch(subWords: string[], parentWords: string[]): boolean {
   return false;
 }
 
+// Compute set of unique character bigrams for Sorensen-Dice coefficient
+function getBigrams(str: string): Set<string> {
+  const clean = (str || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+  const bigrams = new Set<string>();
+  for (let i = 0; i < clean.length - 1; i++) {
+    bigrams.add(clean.substring(i, i + 2));
+  }
+  return bigrams;
+}
+
+// Compute Sorensen-Dice similarity index (0.0 - 1.0) on character bigrams
+function getBigramSim(str1: string, str2: string): number {
+  const b1 = getBigrams(str1);
+  const b2 = getBigrams(str2);
+  if (b1.size === 0 || b2.size === 0) return 0;
+  let intersection = 0;
+  for (const val of b1) {
+    if (b2.has(val)) {
+      intersection++;
+    }
+  }
+  return (2 * intersection) / (b1.size + b2.size);
+}
+
 const searchHistoryFilePath = resolveDataFilePath("search_history.json");
 
 interface SearchHistoryEntry {
@@ -1070,12 +1099,21 @@ function fuzzyMatchGeocodedAddress(
   return null;
 }
 
-// Normalized, high-accuracy local fuzzy matcher with a 0.0 - 1.0 confidence score
-function normalizedFuzzyMatch(inputText: string, db: PostcodeEntry[]): any {
+// Unified, multi-layered local fuzzy matcher with Sorensen-Dice bigram and hierarchical matching
+function improvedLocalFuzzyMatch(inputText: string, db: PostcodeEntry[]): any {
   const cleanInput = (inputText || "").trim().toLowerCase();
   if (!cleanInput) return null;
 
-  // Synonyms normalization for Cambodian administrative divisions
+  const normalizeComponent = (str: string) => {
+    if (!str) return "";
+    return str
+      .toLowerCase()
+      .replace(/\b(province|capital|khan|sangkat|krong|district|municipality|commune|capital city)\b/gi, "")
+      .replace(/[‘’'"`]/g, "")
+      .replace(/[^a-z0-9]/gi, " ")
+      .trim();
+  };
+
   const synonyms: { [key: string]: string[] } = {
     "boeng keng kang": ["bkk", "beoung keng kang", "boeng keng kang", "bangkengkang"],
     "chamkar mon": ["chamkarmon", "chamkar mon", "chamkar morn", "chamkarmorn"],
@@ -1097,68 +1135,129 @@ function normalizedFuzzyMatch(inputText: string, db: PostcodeEntry[]): any {
   }
 
   const inputWords = getWords(substitutedInput);
-  const normalizedInputWords = inputWords.map(normalizeWord);
-  if (normalizedInputWords.length === 0) return null;
 
-  let bestEntry: PostcodeEntry | null = null;
-  let bestScore = 0.0;
+  // 1. First Layer: Concat Match (commune-district-province)
+  let bestEntry1: PostcodeEntry | null = null;
+  let bestScore1 = 0;
 
   for (const item of db) {
-    const pWords = getWords(item.province).map(normalizeWord);
-    const dWords = getWords(item.district).map(normalizeWord);
-    const cWords = getWords(item.commune).map(normalizeWord);
+    const cStr = `${item.commune} ${item.district} ${item.province}`;
 
-    let matchedP = 0;
-    pWords.forEach(pw => {
-      if (normalizedInputWords.some(iw => wordMatches(pw, iw))) matchedP++;
+    // Word ratio match using phonetics
+    const itemWords = getWords(cStr);
+    let matchedWordsCount = 0;
+    inputWords.forEach(iw => {
+      if (itemWords.some(dw => wordMatches(dw, iw))) {
+        matchedWordsCount++;
+      }
     });
-    
-    let matchedD = 0;
-    dWords.forEach(dw => {
-      if (normalizedInputWords.some(iw => wordMatches(dw, iw))) matchedD++;
-    });
+    const wordRatio = inputWords.length > 0 ? (matchedWordsCount / inputWords.length) : 0;
 
-    let matchedC = 0;
-    cWords.forEach(cw => {
-      if (normalizedInputWords.some(iw => wordMatches(cw, iw))) matchedC++;
-    });
+    // Bigram Sorensen-Dice match
+    const phInput = getNormalizedString(substitutedInput);
+    const phCandidate = getNormalizedString(cStr);
+    const bigramSim = getBigramSim(phInput, phCandidate);
 
-    const ratioP = pWords.length > 0 ? (matchedP / pWords.length) : 0.0;
-    const ratioD = dWords.length > 0 ? (matchedD / dWords.length) : 0.0;
-    const ratioC = cWords.length > 0 ? (matchedC / cWords.length) : 0.0;
+    const score = Math.round((wordRatio * 0.4 + bigramSim * 0.6) * 100);
 
-    // Weight allocation: Province 20%, District 35%, Commune 45%
-    let overlapScore = (ratioP * 0.20) + (ratioD * 0.35) + (ratioC * 0.45);
-
-    // Minor contiguous match boost for phonetic alignment
-    if (cWords.length > 0 && isContiguousMatch(cWords, normalizedInputWords)) {
-      overlapScore += 0.05;
-    }
-    if (dWords.length > 0 && isContiguousMatch(dWords, normalizedInputWords)) {
-      overlapScore += 0.03;
-    }
-    if (pWords.length > 0 && isContiguousMatch(pWords, normalizedInputWords)) {
-      overlapScore += 0.02;
+    let boost = 0;
+    if (phCandidate.includes(phInput) || phInput.includes(phCandidate)) {
+      boost += 10;
     }
 
-    overlapScore = Math.min(1.0, overlapScore);
+    const finalScore = Math.min(100, score + boost);
 
-    // Only apply if the input actually has enough info, preventing arbitrary matchings
-    if (cWords.length > 0 && matchedC === 0 && normalizedInputWords.length > 1) {
-      overlapScore -= 0.15;
-    }
-
-    if (overlapScore > bestScore) {
-      bestScore = overlapScore;
-      bestEntry = item;
+    if (finalScore > bestScore1) {
+      bestScore1 = finalScore;
+      bestEntry1 = item;
     }
   }
 
-  // The score must be strictly above 0.45 to be accepted on local fuzzy matching
-  if (!bestEntry || bestScore <= 0.45) {
-    return null;
+  if (bestEntry1 && bestScore1 >= 50) {
+    return assembleMatchResult(bestEntry1, bestScore1, inputText);
   }
 
+  // 2. Second Layer: Multi-step Hierarchical Match if Layer 1 yields low confidence
+  const uniqueProvinces = Array.from(new Set(db.map(x => x.province)));
+  let bestProvName = "";
+  let bestProvScore = 0;
+
+  uniqueProvinces.forEach(provName => {
+    const cleanProv = normalizeComponent(provName);
+    const cleanInputText = normalizeComponent(substitutedInput);
+
+    const pWordRatio = getWords(cleanProv).some(pw => inputWords.some(iw => wordMatches(pw, iw) || iw.includes(pw) || pw.includes(iw))) ? 1.0 : 0.0;
+    const pBigramSim = getBigramSim(cleanInputText, cleanProv);
+    const pScore = Math.round((pWordRatio * 0.5 + pBigramSim * 0.5) * 100);
+
+    if (pScore > bestProvScore) {
+      bestProvScore = pScore;
+      bestProvName = provName;
+    }
+  });
+
+  if (bestProvName && bestProvScore >= 30) {
+    const provinceRows = db.filter(x => x.province === bestProvName);
+
+    const uniqueDistricts = Array.from(new Set(provinceRows.map(x => x.district)));
+    let bestDistName = "";
+    let bestDistScore = 0;
+
+    uniqueDistricts.forEach(distName => {
+      const cleanDist = normalizeComponent(distName);
+      const cleanInputText = normalizeComponent(substitutedInput);
+
+      const dWordRatio = getWords(cleanDist).some(dw => inputWords.some(iw => wordMatches(dw, iw) || iw.includes(dw) || dw.includes(iw))) ? 1.0 : 0.0;
+      const dBigramSim = getBigramSim(cleanInputText, cleanDist);
+      const dScore = Math.round((dWordRatio * 0.5 + dBigramSim * 0.5) * 100);
+
+      if (dScore > bestDistScore) {
+        bestDistScore = dScore;
+        bestDistName = distName;
+      }
+    });
+
+    if (bestDistName && bestDistScore >= 35) {
+      const districtRows = provinceRows.filter(x => x.district === bestDistName);
+
+      const uniqueCommunes = Array.from(new Set(districtRows.map(x => x.commune)));
+      let bestCommName = "";
+      let bestCommScore = 0;
+
+      uniqueCommunes.forEach(commName => {
+        const cleanComm = normalizeComponent(commName);
+        const cleanInputText = normalizeComponent(substitutedInput);
+
+        const cWordRatio = getWords(cleanComm).some(cw => inputWords.some(iw => wordMatches(cw, iw) || iw.includes(cw) || cw.includes(iw))) ? 1.0 : 0.0;
+        const cBigramSim = getBigramSim(cleanInputText, cleanComm);
+        const cScore = Math.round((cWordRatio * 0.5 + cBigramSim * 0.5) * 100);
+
+        if (cScore > bestCommScore) {
+          bestCommScore = cScore;
+          bestCommName = commName;
+        }
+      });
+
+      if (bestCommName) {
+        const found = districtRows.find(x => x.commune === bestCommName);
+        if (found) {
+          const calculatedScore = Math.round(
+            (bestProvScore / 100) * 20 +
+            (bestDistScore / 100) * 35 +
+            (bestCommScore / 100) * 45
+          );
+          const finalScore = Math.max(50, calculatedScore);
+          return assembleMatchResult(found, finalScore, inputText);
+        }
+      }
+    }
+  }
+
+  return null;
+}
+
+function assembleMatchResult(bestEntry: PostcodeEntry, score: number, inputText: string) {
+  const cleanInput = (inputText || "").trim().toLowerCase();
   const numbersFound: string[] = cleanInput.match(/\b\d{5,6}\b/g) || [];
   let status = "No Postcode Detected";
   const matchesNew = numbersFound.includes(bestEntry.new_postcode);
@@ -1184,15 +1283,18 @@ function normalizedFuzzyMatch(inputText: string, db: PostcodeEntry[]): any {
     new_city_name: bestEntry.new_city_name || "",
     ib_sort_co: bestEntry.ib_sort_co || "",
     inbound_fac: bestEntry.inbound_fac || "",
-    score: Math.max(50, Math.round(bestScore * 100)), // Map 0.0 - 1.0 -> 0 - 100 for visual consistency, minimum score 50 on successful match
+    score: Math.max(50, score),
     input_text: inputText
   };
 }
 
-// Local javascript fallback matching algorithm
+function normalizedFuzzyMatch(inputText: string, db: PostcodeEntry[]): any {
+  return improvedLocalFuzzyMatch(inputText, db);
+}
+
 function localPostcodeMatch(inputText: string, db: PostcodeEntry[], cutoffOverride?: number): any {
-  const cleanInput = (inputText || "").trim().toLowerCase();
-  if (!cleanInput) {
+  const result = improvedLocalFuzzyMatch(inputText, db);
+  if (!result) {
     return {
       province: "Unknown",
       district: "Unknown",
@@ -1204,196 +1306,7 @@ function localPostcodeMatch(inputText: string, db: PostcodeEntry[], cutoffOverri
       input_text: inputText || ""
     };
   }
-
-  // Look for any postcode-like numbers (5 to 6 digits)
-  const numbersFound: string[] = cleanInput.match(/\b\d{5,6}\b/g) || [];
-
-  // Common synonym normalization for Cambodian landmarks & districts
-  const synonyms: { [key: string]: string[] } = {
-    "boeng keng kang": ["bkk", "beoung keng kang", "boeng keng kang", "bangkengkang"],
-    "chamkar mon": ["chamkarmon", "chamkar mon", "chamkar morn", "chamkarmorn"],
-    "prampir meakkara": ["7 makara", "7makara", "prampir makara", "prampir meakkara", "7_makara", "7-makara"],
-    "tuol kouk": ["toul kouk", "toulkouk", "tuol kouk", "tual kouk", "tuolkouk"],
-    "phnom penh": ["pp", "phnompenh", "phnom penh", "phnom, penh"],
-    "doun penh": ["daun penh", "doun penh", "daunpenh", "dounpenh"],
-    "saen sokh": ["sen sok", "sensok", "saen sok", "saensok", "sean sok", "seansok", "saen sokh", "saensokh"],
-    "phnum penh thmei": ["phnom penh thmey", "phnum penh thmey", "phnom penh thmei", "phnum penh thmei", "phnompenhthmey", "phnumpenhthmey"]
-  };
-
-  let substitutedInput = cleanInput;
-  for (const [canonical, aliases] of Object.entries(synonyms)) {
-    for (const alias of aliases) {
-      if (substitutedInput.includes(alias)) {
-        substitutedInput = substitutedInput.replace(alias, canonical);
-      }
-    }
-  }
-
-  const inputWords = getWords(substitutedInput);
-  const normalizedInputWords = inputWords.map(normalizeWord);
-
-  let bestEntry: PostcodeEntry | null = null;
-  let bestScore = 0;
-
-  for (const item of db) {
-    let score = 0;
-
-    const pWords = getWords(item.province);
-    const dWords = getWords(item.district);
-    const cWords = getWords(item.commune);
-
-    const normPWords = pWords.map(normalizeWord);
-    const normDWords = dWords.map(normalizeWord);
-    const normCWords = cWords.map(normalizeWord);
-
-    let matchedProvince = false;
-    let matchedDistrict = false;
-    let matchedCommune = false;
-
-    // 1. Contiguous word boundary sequence matching (Very high priority)
-    if (normCWords.length > 0 && isContiguousMatch(normCWords, normalizedInputWords)) {
-      score += 45;
-      matchedCommune = true;
-    } else {
-      // Fuzzy word overlaps for commune
-      if (normCWords.length > 0) {
-        let matched = 0;
-        for (const cw of normCWords) {
-          if (normalizedInputWords.some(iw => wordMatches(cw, iw))) {
-            matched++;
-          }
-        }
-        const ratio = matched / normCWords.length;
-        if (ratio === 1.0) {
-          score += 35;
-          matchedCommune = true;
-        }
-        else if (ratio >= 0.5) {
-          score += ratio * 25;
-          matchedCommune = true;
-        }
-      }
-    }
-
-    if (normDWords.length > 0 && isContiguousMatch(normDWords, normalizedInputWords)) {
-      score += 25;
-      matchedDistrict = true;
-    } else {
-      // Fuzzy word overlaps for district
-      if (normDWords.length > 0) {
-        let matched = 0;
-        for (const dw of normDWords) {
-          if (normalizedInputWords.some(iw => wordMatches(dw, iw))) {
-            matched++;
-          }
-        }
-        const ratio = matched / normDWords.length;
-        if (ratio === 1.0) {
-          score += 20;
-          matchedDistrict = true;
-        }
-        else if (ratio >= 0.5) {
-          score += ratio * 15;
-          matchedDistrict = true;
-        }
-      }
-    }
-
-    if (normPWords.length > 0 && isContiguousMatch(normPWords, normalizedInputWords)) {
-      score += 15;
-      matchedProvince = true;
-    } else {
-      // Fuzzy word overlaps for province
-      if (normPWords.length > 0) {
-        let matched = 0;
-        for (const pw of normPWords) {
-          if (normalizedInputWords.some(iw => wordMatches(pw, iw))) {
-            matched++;
-          }
-        }
-        const ratio = matched / normPWords.length;
-        if (ratio === 1.0) {
-          score += 10;
-          matchedProvince = true;
-        }
-        else if (ratio >= 0.5) {
-          score += ratio * 5;
-          matchedProvince = true;
-        }
-      }
-    }
-
-    // High confidence Combo Bonuses if multiple levels are matched
-    if (matchedProvince && matchedDistrict && matchedCommune) {
-      score += 25;
-    } else if (matchedDistrict && matchedCommune) {
-      score += 20;
-    } else if (matchedProvince && matchedDistrict) {
-      score += 15;
-    } else if (matchedProvince && matchedCommune) {
-      score += 15;
-    }
-
-    // Penalize matches with absolutely zero commune overlap if commune is present in database
-    // unless input contains very few words. This guarantees we don't map arbitrary locations in same province.
-    const hasCommuneWords = normCWords.length > 0;
-    const matchedAnyCommuneWord = normCWords.some(cw => normalizedInputWords.some(iw => wordMatches(cw, iw)));
-    if (hasCommuneWords && !matchedAnyCommuneWord && inputWords.length > 1) {
-      score -= 15;
-    }
-
-    // Cap at 100
-    score = Math.min(100, score);
-
-    if (score > bestScore) {
-      bestScore = score;
-      bestEntry = item;
-    }
-  }
-
-  const activeCutoff = cutoffOverride !== undefined ? cutoffOverride : 50;
-
-  // We require a minimum confidence threshold to prevent completely random matching
-  if (!bestEntry || bestScore < activeCutoff) {
-    return {
-      province: "Unknown",
-      district: "Unknown",
-      commune: "Unknown",
-      postcode_status: "Unknown",
-      existing_postcode: "",
-      new_postcode: "",
-      score: 0,
-      input_text: inputText
-    };
-  }
-
-  // Determine postcode status based on presence of postcodes in input
-  let status = "No Postcode Detected"; // default
-  const matchesNew = numbersFound.includes(bestEntry.new_postcode);
-  const matchesExisting = bestEntry.existing_postcode ? numbersFound.includes(bestEntry.existing_postcode) : false;
-
-  if (numbersFound.length > 0) {
-    if (matchesNew) {
-      status = "Follow New Postcode";
-    } else if (matchesExisting) {
-      status = "Follow Existing Postcode";
-    } else {
-      status = "Incorrect Postcode";
-    }
-  }
-
-  return {
-    province: bestEntry.province,
-    district: bestEntry.district,
-    commune: bestEntry.commune,
-    postcode_status: status,
-    existing_postcode: bestEntry.existing_postcode || "",
-    new_postcode: bestEntry.new_postcode || "",
-    ib_sort_co: bestEntry.ib_sort_co || "",
-    inbound_fac: bestEntry.inbound_fac || "",
-    score: Math.max(50, bestScore),
-    input_text: inputText
-  };
+  return result;
 }
 
 // Helper to strip single or double quotes (often added by Excel spreadsheet outputs)
@@ -2778,52 +2691,69 @@ app.post("/api/migrate", async (req, res) => {
       const inputText = scratchInputs[i];
       const origIndex = scratchIndices[i];
       
-      const fuzzyResult = normalizedFuzzyMatch(inputText, postcodeDb);
-      if (fuzzyResult) {
-        // High confidence locally matched! Persist in search history as well so it's visible in Logs
-        const historyEntry = await addSearchHistory(inputText, fuzzyResult, fuzzyResult.score, dynamicCutoff);
+      // Layer 1 & 2: Local Fuzzy Match
+      let resolvedResult = improvedLocalFuzzyMatch(inputText, postcodeDb);
+      let resolveType = "local";
+
+      // If null, lookup search history for closest lookup value
+      if (!resolvedResult) {
+        let closestEntry = null;
+        let highestSim = 0;
+        for (const entry of searchHistoryCache) {
+          if (entry.result && entry.result.province && entry.result.province !== "Unknown") {
+            const sim = getBigramSim(inputText, entry.original_query || entry.query);
+            if (sim > highestSim) {
+              highestSim = sim;
+              closestEntry = entry;
+            }
+          }
+        }
+        if (closestEntry && highestSim >= 0.75) {
+          resolvedResult = {
+            ...closestEntry.result,
+            score: closestEntry.score || Math.round(highestSim * 100),
+            input_text: `Search History Fuzzy Match [Closest: "${closestEntry.original_query || closestEntry.query}"]`
+          };
+          resolveType = "history";
+        }
+      }
+
+      // If null, do Google Place Geocoder (if configured)
+      if (!resolvedResult && googleMapsKey && !googleMapsKey.includes("••••") && googleMapsKey.trim().length > 10) {
+        try {
+          const geocoded = await geocodeAddressWithGoogle(inputText, googleMapsKey);
+          if (geocoded) {
+            const matchedGoogle = fuzzyMatchGeocodedAddress(geocoded.province, geocoded.district, geocoded.commune, postcodeDb, inputText);
+            if (matchedGoogle) {
+              resolvedResult = {
+                ...matchedGoogle,
+                input_text: `Google Geocode Match [${geocoded.formattedAddress}]`
+              };
+              resolveType = "google";
+            }
+          }
+        } catch (geoErr) {
+          console.error(`[Google Proxy Geocode Error] Failed to geocode text: ${inputText}`, geoErr);
+        }
+      }
+
+      if (resolvedResult) {
+        // High confidence locally matched or cached in history or geocoded via Google!
+        const scoreToLog = resolvedResult.score || 95;
+        const historyEntry = await addSearchHistory(inputText, resolvedResult, scoreToLog, dynamicCutoff);
         processedResults[origIndex] = {
-          ...fuzzyResult,
+          ...resolvedResult,
           search_id: historyEntry.id,
-          confidence_score: historyEntry.score,
+          confidence_score: scoreToLog,
           benchmark_used: historyEntry.benchmark_used,
           cached: false
         };
-        console.log(`[Status] Resolved '${inputText}' using premium local fuzzy matcher (Score: ${fuzzyResult.score}%)`);
+        console.log(`[Status] Resolved '${inputText}' using ${resolveType} routing layer (Score: ${scoreToLog}%)`);
       } else {
-        // If Google Maps API Key is active, let's identify via Google first!
-        let googleFuzzyMatched = null;
-        if (googleMapsKey && !googleMapsKey.includes("••••") && googleMapsKey.trim().length > 10) {
-          try {
-            const geocoded = await geocodeAddressWithGoogle(inputText, googleMapsKey);
-            if (geocoded) {
-              googleFuzzyMatched = fuzzyMatchGeocodedAddress(geocoded.province, geocoded.district, geocoded.commune, postcodeDb, inputText);
-              if (googleFuzzyMatched) {
-                googleFuzzyMatched.input_text = `Google Geocode Match [${geocoded.formattedAddress}]`;
-              }
-            }
-          } catch (geoErr) {
-            console.error(`[Google Proxy Geocode Error] Failed to geocode text: ${inputText}`, geoErr);
-          }
-        }
-
-        if (googleFuzzyMatched) {
-          const scoreToLog = googleFuzzyMatched.score || 95;
-          const historyEntry = await addSearchHistory(inputText, googleFuzzyMatched, scoreToLog, dynamicCutoff);
-          processedResults[origIndex] = {
-            ...googleFuzzyMatched,
-            search_id: historyEntry.id,
-            confidence_score: scoreToLog,
-            benchmark_used: historyEntry.benchmark_used,
-            cached: false
-          };
-          console.log(`[Status] Resolved '${inputText}' using premium Google Geocoder & local fuzzy matcher (Score: ${scoreToLog}%)`);
-        } else {
-          // Fall back to AI matching
-          aiInputs.push(inputText);
-          aiIndices.push(origIndex);
-          console.log(`[Status] Route '${inputText}' to AI/Gemini matching engine (Fuzzy confidence too low)`);
-        }
+        // Fall back to AI matching
+        aiInputs.push(inputText);
+        aiIndices.push(origIndex);
+        console.log(`[Status] Route '${inputText}' to AI/Gemini matching engine (Local layers returned null)`);
       }
     }
 
@@ -2917,24 +2847,28 @@ ${JSON.stringify(aiInputs, null, 2)}`,
       // Enrich newly resolved results
       unresolvedResults = unresolvedResults.map((row, idx) => {
         const originalInput = aiInputs[idx] || "";
-        const mProvince = (row.province || "").toLowerCase().replace(/[^a-z0-9]/g, "");
-        const mDistrict = (row.district || "").toLowerCase().replace(/[^a-z0-9]/g, "");
-        const mCommune = (row.commune || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+        const mProvince = row.province || "Unknown";
+        const mDistrict = row.district || "Unknown";
+        const mCommune = row.commune || "Unknown";
 
-        const match = postcodeDb.find(e => 
-          e.province.toLowerCase().replace(/[^a-z0-9]/g, "") === mProvince &&
-          e.district.toLowerCase().replace(/[^a-z0-9]/g, "") === mDistrict &&
-          e.commune.toLowerCase().replace(/[^a-z0-9]/g, "") === mCommune
-        );
+        const match = fuzzyMatchGeocodedAddress(mProvince, mDistrict, mCommune, postcodeDb, originalInput) ||
+                      improvedLocalFuzzyMatch(`${mCommune} ${mDistrict} ${mProvince}`, postcodeDb);
 
         let finalRow = { ...row };
         if (match) {
           finalRow = {
             ...row,
+            province: match.province,
+            district: match.district,
+            commune: match.commune,
+            existing_postcode: match.existing_postcode || row.existing_postcode || "",
+            new_postcode: match.new_postcode || row.new_postcode || "",
+            postcode_status: match.postcode_status || row.postcode_status || "No Postcode Detected",
             input_text: row.input_text || originalInput,
-            new_city_name: row.new_city_name || match.new_city_name || "",
-            ib_sort_co: row.ib_sort_co || match.ib_sort_co || "",
-            inbound_fac: row.inbound_fac || match.inbound_fac || ""
+            new_city_name: match.new_city_name || "",
+            ib_sort_co: match.ib_sort_co || "",
+            inbound_fac: match.inbound_fac || "",
+            score: Math.max(50, match.score || row.score || 100)
           };
         } else {
           finalRow = {

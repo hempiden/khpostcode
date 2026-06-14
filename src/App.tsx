@@ -165,10 +165,100 @@ const localPostcodeMatch = (inputText: string, db: PostcodeEntry[]): MigrationRe
     };
   }
 
-  // Look for any postcode-like numbers (5 to 6 digits)
-  const numbersFound: string[] = cleanInput.match(/\b\d{5,6}\b/g) || [];
+  // Private helper functions for phonetic parsing and edit distance calculation
+  const normalizeWord = (word: string): string => {
+    return word
+      .toLowerCase()
+      .replace(/ae/g, "e")
+      .replace(/ou/g, "u")
+      .replace(/oa/g, "u")
+      .replace(/lh/g, "l")
+      .replace(/rh/g, "r")
+      .replace(/om/g, "um")
+      .replace(/rn/g, "n")
+      .replace(/kk/g, "k")
+      .replace(/tt/g, "t")
+      .replace(/bb/g, "b")
+      .replace(/pp/g, "p")
+      .replace(/aa/g, "a")
+      .replace(/ee/g, "e")
+      .replace(/oo/g, "o")
+      .replace(/ie/g, "ea")
+      .replace(/eo/g, "oe")
+      .replace(/kh/g, "k")
+      .replace(/ch/g, "c")
+      .replace(/ph/g, "p")
+      .replace(/th/g, "t");
+  };
 
-  // Common synonym normalization for Cambodian landmarks & districts
+  const stopWords = new Set(["province", "district", "commune", "sangkat", "khan", "krong", "capital", "city", "village", "phum", "street", "st"]);
+  const getWords = (s: string): string[] => {
+    return (s || "")
+      .toLowerCase()
+      .replace(/[^a-z0-9\s]/g, " ")
+      .split(/\s+/)
+      .filter(w => w.length > 0 && !stopWords.has(w));
+  };
+
+  const wordMatches = (w1: string, w2: string): boolean => {
+    if (w1 === w2) return true;
+    const nw1 = normalizeWord(w1);
+    const nw2 = normalizeWord(w2);
+    if (nw1 === nw2) return true;
+    
+    if (nw1.length >= 4 && nw2.length >= 4) {
+      // Clean and lightweight Levenshtein distance formulation
+      const track = Array(nw2.length + 1).fill(null).map(() => Array(nw1.length + 1).fill(null));
+      for (let i = 0; i <= nw1.length; i += 1) track[0][i] = i;
+      for (let j = 0; j <= nw2.length; j += 1) track[j][0] = j;
+      for (let j = 1; j <= nw2.length; j += 1) {
+        for (let i = 1; i <= nw1.length; i += 1) {
+          const indicator = nw1[i - 1] === nw2[j - 1] ? 0 : 1;
+          track[j][i] = Math.min(
+            track[j][i - 1] + 1, // deletion
+            track[j - 1][i] + 1, // insertion
+            track[j - 1][i - 1] + indicator // substitution
+          );
+        }
+      }
+      return track[nw2.length][nw1.length] <= 1;
+    }
+    return false;
+  };
+
+  const getBigrams = (str: string): Set<string> => {
+    const clean = (str || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+    const bigrams = new Set<string>();
+    for (let i = 0; i < clean.length - 1; i++) {
+      bigrams.add(clean.substring(i, i + 2));
+    }
+    return bigrams;
+  };
+
+  const getBigramSim = (str1: string, str2: string): number => {
+    const b1 = getBigrams(str1);
+    const b2 = getBigrams(str2);
+    if (b1.size === 0 || b2.size === 0) return 0;
+    let intersection = 0;
+    for (const val of b1) {
+      if (b2.has(val)) {
+        intersection++;
+      }
+    }
+    return (2 * intersection) / (b1.size + b2.size);
+  };
+
+  const normalizeComponent = (str: string): string => {
+    if (!str) return "";
+    return str
+      .toLowerCase()
+      .replace(/\b(province|capital|khan|sangkat|krong|district|municipality|commune|capital city)\b/gi, "")
+      .replace(/[‘’'"`]/g, "")
+      .replace(/[^a-z0-9]/gi, " ")
+      .trim();
+  };
+
+  // Synonyms to canonical divisions mapping
   const synonyms: { [key: string]: string[] } = {
     "boeng keng kang": ["bkk", "beoung keng kang", "boeng keng kang", "bangkengkang"],
     "chamkar mon": ["chamkarmon", "chamkar mon", "chamkar morn", "chamkarmorn"],
@@ -189,89 +279,140 @@ const localPostcodeMatch = (inputText: string, db: PostcodeEntry[]): MigrationRe
     }
   }
 
-  let bestEntry: PostcodeEntry | null = null;
-  let bestScore = 0;
+  const inputWords = getWords(substitutedInput);
+
+  // 1. First Layer: Concat Match (commune-district-province)
+  let bestEntry1: PostcodeEntry | null = null;
+  let bestScore1 = 0;
 
   for (const item of db) {
-    let score = 0;
-    const p = (item.province || "").toLowerCase();
-    const d = (item.district || "").toLowerCase();
-    const c = (item.commune || "").toLowerCase();
-
-    let matchedProvince = false;
-    let matchedDistrict = false;
-    let matchedCommune = false;
-
-    // Check direct commune substring match which is very strong
-    if (c && substitutedInput.includes(c)) {
-      score += 25;
-      matchedCommune = true;
-    }
-    // Check district matching
-    if (d && substitutedInput.includes(d)) {
-      score += 15;
-      matchedDistrict = true;
-    }
-    // Check province matching
-    if (p && substitutedInput.includes(p)) {
-      score += 5;
-      matchedProvince = true;
-    }
-
-    // Checking word overlap
-    const words = substitutedInput.split(/[\s,.\-\/]+/);
-    for (const w of words) {
-      if (w.length < 3) continue;
-      if (c && c.includes(w)) {
-        score += 5;
-        matchedCommune = true;
+    const cStr = `${item.commune} ${item.district} ${item.province}`;
+    const itemWords = getWords(cStr);
+    
+    let matchedWordsCount = 0;
+    inputWords.forEach(iw => {
+      if (itemWords.some(dw => wordMatches(dw, iw))) {
+        matchedWordsCount++;
       }
-      if (d && d.includes(w)) {
-        score += 3;
-        matchedDistrict = true;
-      }
-      if (p && p.includes(w)) {
-        score += 1;
-        matchedProvince = true;
-      }
+    });
+    const wordRatio = inputWords.length > 0 ? (matchedWordsCount / inputWords.length) : 0;
+
+    const normInputJoin = inputWords.map(normalizeWord).join(" ");
+    const normCandJoin = itemWords.map(normalizeWord).join(" ");
+    const bigramSim = getBigramSim(normInputJoin, normCandJoin);
+
+    const score = Math.round((wordRatio * 0.4 + bigramSim * 0.6) * 100);
+
+    let boost = 0;
+    if (normCandJoin.includes(normInputJoin) || normInputJoin.includes(normCandJoin)) {
+       boost += 10;
     }
 
-    // High confidence Combo Bonuses if multiple levels are matched
-    if (matchedProvince && matchedDistrict && matchedCommune) {
-      score += 25;
-    } else if (matchedDistrict && matchedCommune) {
-      score += 20;
-    } else if (matchedProvince && matchedDistrict) {
-      score += 15;
-    } else if (matchedProvince && matchedCommune) {
-      score += 15;
-    }
+    const finalScore = Math.min(100, score + boost);
 
-    // Cap the maximum score at 100
-    score = Math.min(100, score);
-
-    if (score > bestScore) {
-      bestScore = score;
-      bestEntry = item;
+    if (finalScore > bestScore1) {
+      bestScore1 = finalScore;
+      bestEntry1 = item;
     }
   }
 
-  if (!bestEntry || bestScore < 50) {
-    return {
-      province: "Unknown",
-      district: "Unknown",
-      commune: "Unknown",
-      postcode_status: "Unknown",
-      existing_postcode: "",
-      new_postcode: "",
-      score: 0,
-      input_text: inputText
-    };
+  if (bestEntry1 && bestScore1 >= 50) {
+    return assembleResultObj(bestEntry1, bestScore1, inputText, cleanInput);
   }
 
-  // Determine postcode status based on presence of postcodes in input
-  let status: MigrationResult["postcode_status"] = "Incorrect Postcode"; // default fallback if matched administrative unit is found but no postal match
-  
+  // 2. Second Layer: Hierarchical Search if Concat search fell below 50
+  const uniqueProvinces = Array.from(new Set(db.map(x => x.province)));
+  let bestProvName = "";
+  let bestProvScore = 0;
+
+  uniqueProvinces.forEach(provName => {
+    const cleanProv = normalizeComponent(provName);
+    const cleanInputText = normalizeComponent(substitutedInput);
+
+    const pWordRatio = getWords(cleanProv).some(pw => inputWords.some(iw => wordMatches(pw, iw) || iw.includes(pw) || pw.includes(iw))) ? 1.0 : 0.0;
+    const pBigramSim = getBigramSim(cleanInputText, cleanProv);
+    const pScore = Math.round((pWordRatio * 0.5 + pBigramSim * 0.5) * 100);
+
+    if (pScore > bestProvScore) {
+      bestProvScore = pScore;
+      bestProvName = provName;
+    }
+  });
+
+  if (bestProvName && bestProvScore >= 30) {
+    const provinceRows = db.filter(x => x.province === bestProvName);
+
+    const uniqueDistricts = Array.from(new Set(provinceRows.map(x => x.district)));
+    let bestDistName = "";
+    let bestDistScore = 0;
+
+    uniqueDistricts.forEach(distName => {
+      const cleanDist = normalizeComponent(distName);
+      const cleanInputText = normalizeComponent(substitutedInput);
+
+      const dWordRatio = getWords(cleanDist).some(dw => inputWords.some(iw => wordMatches(dw, iw) || iw.includes(dw) || dw.includes(iw))) ? 1.0 : 0.0;
+      const dBigramSim = getBigramSim(cleanInputText, cleanDist);
+      const dScore = Math.round((dWordRatio * 0.5 + dBigramSim * 0.5) * 100);
+
+      if (dScore > bestDistScore) {
+        bestDistScore = dScore;
+        bestDistName = distName;
+      }
+    });
+
+    if (bestDistName && bestDistScore >= 35) {
+      const districtRows = provinceRows.filter(x => x.district === bestDistName);
+
+      const uniqueCommunes = Array.from(new Set(districtRows.map(x => x.commune)));
+      let bestCommName = "";
+      let bestCommScore = 0;
+
+      uniqueCommunes.forEach(commName => {
+        const cleanComm = normalizeComponent(commName);
+        const cleanInputText = normalizeComponent(substitutedInput);
+
+        const cWordRatio = getWords(cleanComm).some(cw => inputWords.some(iw => wordMatches(cw, iw) || iw.includes(cw) || cw.includes(iw))) ? 1.0 : 0.0;
+        const cBigramSim = getBigramSim(cleanInputText, cleanComm);
+        const cScore = Math.round((cWordRatio * 0.5 + cBigramSim * 0.5) * 100);
+
+        if (cScore > bestCommScore) {
+          bestCommScore = cScore;
+          bestCommName = commName;
+        }
+      });
+
+      if (bestCommName) {
+        const found = districtRows.find(x => x.commune === bestCommName);
+        if (found) {
+          const calculatedScore = Math.round(
+            (bestProvScore / 100) * 20 +
+            (bestDistScore / 100) * 35 +
+            (bestCommScore / 100) * 45
+          );
+          const finalScore = Math.max(50, calculatedScore);
+          return assembleResultObj(found, finalScore, inputText, cleanInput);
+        }
+      }
+    }
+  }
+
+  // Fallback defaults if unresolved
+  return {
+    province: "Unknown",
+    district: "Unknown",
+    commune: "Unknown",
+    postcode_status: "Unknown",
+    existing_postcode: "",
+    new_postcode: "",
+    score: 0,
+    input_text: inputText
+  };
+};
+
+function assembleResultObj(bestEntry: PostcodeEntry, score: number, inputText: string, cleanInput: string): MigrationResult {
+  const numbersFound: string[] = cleanInput.match(/\b\d{5,6}\b/g) || [];
+  let status: MigrationResult["postcode_status"] = "Incorrect Postcode";
+
   const matchesNew = numbersFound.includes(bestEntry.new_postcode);
   const matchesExisting = bestEntry.existing_postcode ? numbersFound.includes(bestEntry.existing_postcode) : false;
 
@@ -280,7 +421,6 @@ const localPostcodeMatch = (inputText: string, db: PostcodeEntry[]): MigrationRe
   } else if (matchesExisting) {
     status = "Follow Existing Postcode";
   } else if (numbersFound.length === 0) {
-    // No postcode digits were supplied on the label
     status = "No Postcode Detected";
   }
 
@@ -294,10 +434,10 @@ const localPostcodeMatch = (inputText: string, db: PostcodeEntry[]): MigrationRe
     ib_sort_co: bestEntry.ib_sort_co || "",
     inbound_fac: bestEntry.inbound_fac || "",
     new_city_name: bestEntry.new_city_name || "",
-    score: Math.max(50, bestScore),
+    score: Math.max(50, score),
     input_text: inputText
   };
-};
+}
 
 // Client-side component-level Google Geocode/Places fuzzy matcher
 const fuzzyMatchGeocodedAddress = (
