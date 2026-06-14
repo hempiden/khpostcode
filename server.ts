@@ -1104,6 +1104,20 @@ function improvedLocalFuzzyMatch(inputText: string, db: PostcodeEntry[]): any {
   const cleanInput = (inputText || "").trim().toLowerCase();
   if (!cleanInput) return null;
 
+  // Layer 0: Postcode Direct Match Shortcut (High-confidence)
+  const foundPostcodes = cleanInput.match(/\d{5,6}/);
+  if (foundPostcodes) {
+    const pc = foundPostcodes[0];
+    const matchNew = db.find(x => x.new_postcode === pc);
+    if (matchNew) {
+      return assembleMatchResult(matchNew, 100, inputText);
+    }
+    const matchExisting = db.find(x => x.existing_postcode === pc);
+    if (matchExisting) {
+      return assembleMatchResult(matchExisting, 100, inputText);
+    }
+  }
+
   const normalizeComponent = (str: string) => {
     if (!str) return "";
     return str

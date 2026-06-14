@@ -165,6 +165,20 @@ const localPostcodeMatch = (inputText: string, db: PostcodeEntry[]): MigrationRe
     };
   }
 
+  // Layer 0: Postcode Direct Match Shortcut (High-confidence)
+  const foundPostcodes = cleanInput.match(/\d{5,6}/);
+  if (foundPostcodes) {
+    const pc = foundPostcodes[0];
+    const matchNew = db.find(x => x.new_postcode === pc);
+    if (matchNew) {
+      return assembleResultObj(matchNew, 100, inputText, cleanInput);
+    }
+    const matchExisting = db.find(x => x.existing_postcode === pc);
+    if (matchExisting) {
+      return assembleResultObj(matchExisting, 100, inputText, cleanInput);
+    }
+  }
+
   // Private helper functions for phonetic parsing and edit distance calculation
   const normalizeWord = (word: string): string => {
     return word
@@ -904,7 +918,7 @@ export default function App() {
   
   // Navigation / Tabs
   const [activeTab, setActiveTabState] = useState<"single" | "bulk" | "database" | "superadmin" | "cache">("single");
-  const [subTool, setSubToolState] = useState<"text" | "photo" | "map" | "dropdown">("dropdown");
+  const [subTool, setSubToolState] = useState<"text" | "photo" | "map" | "dropdown">("text");
 
   // Token cache search logs and dynamic scoring state registry
   const [searchHistory, setSearchHistory] = useState<any[]>([]);
@@ -3395,10 +3409,10 @@ ON CONFLICT (email) DO NOTHING;`;
 
   const handleLogoClick = () => {
     setActiveTab("single");
-    if (apiConnections.enableDropdownSearch !== false) {
-      setSubTool("dropdown");
-    } else if (apiConnections.enableTextSearch !== false) {
+    if (apiConnections.enableTextSearch !== false) {
       setSubTool("text");
+    } else if (apiConnections.enableDropdownSearch !== false) {
+      setSubTool("dropdown");
     } else if (apiConnections.enablePhotoSearch !== false) {
       setSubTool("photo");
     } else if (apiConnections.enableMapSearch !== false) {
@@ -3450,15 +3464,15 @@ ON CONFLICT (email) DO NOTHING;`;
 
           <nav className="flex items-center gap-3 sm:gap-4 md:gap-5 text-[11px] sm:text-xs md:text-sm font-semibold flex-wrap justify-center font-sans tracking-wide">
 
-            {/* Free-Text Search Tab */}
+            {/* Home Tab */}
             {apiConnections.enableTextSearch !== false && (
               <button 
                 id="tool_text"
                 onClick={() => { setActiveTab("single"); setSubTool("text"); }}
-                className={`text-white transition-all duration-200 cursor-pointer py-1 flex items-center gap-1 sm:gap-1.5 ${activeTab === "single" && subTool === "text" ? "text-opacity-100 font-extrabold border-b border-white scale-105 animate-pulse" : "text-opacity-75 hover:text-opacity-100 border-b border-transparent"}`}
+                className={`text-white transition-all duration-200 cursor-pointer py-1 flex items-center gap-1 sm:gap-1.5 ${activeTab === "single" && subTool === "text" ? "text-opacity-100 font-extrabold border-b border-white scale-105" : "text-opacity-75 hover:text-opacity-100 border-b border-transparent"}`}
               >
-                <FileText className="w-3.5 h-3.5 sm:w-4 sm:h-4 shrink-0 text-amber-300" />
-                <span>Free-Text</span>
+                <Home className="w-3.5 h-3.5 sm:w-4 sm:h-4 shrink-0 text-amber-300" />
+                <span>Home</span>
               </button>
             )}
 
