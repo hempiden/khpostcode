@@ -915,6 +915,7 @@ export default function App() {
   const [customerProvince, setCustomerProvince] = useState("");
   const [customerDistrict, setCustomerDistrict] = useState("");
   const [customerCommune, setCustomerCommune] = useState("");
+  const [showMobileSelectors, setShowMobileSelectors] = useState(false);
   
   // Navigation / Tabs
   const [activeTab, setActiveTabState] = useState<"single" | "bulk" | "database" | "superadmin" | "cache">("single");
@@ -3883,85 +3884,122 @@ ON CONFLICT (email) DO NOTHING;`;
 
                 {subTool === "dropdown" && (
                   <div className="flex flex-col gap-4 animate-fadeIn">
-                    <div className="border-b border-slate-100 pb-3">
-                      <h3 className="font-bold text-base text-slate-800 flex items-center gap-2">
-                        <MapPin className="w-5 h-5 text-emerald-500 shrink-0" />
-                        Structured Division Selectors
-                      </h3>
-                      <p className="text-slate-500 text-xs mt-1 leading-normal">
-                        Select administrative points cascading from Province to Khan and Sangkat to extract the active national 6-digit postcodes.
-                      </p>
-                    </div>
-
-                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                      <div className="flex flex-col gap-1">
-                        <label className="text-[10px] font-bold text-slate-400 uppercase">PROVINCE / CAPITAL</label>
-                        <select
-                          id="lookup_province"
-                          value={customerProvince}
-                          onChange={(e) => {
-                            setCustomerProvince(e.target.value);
-                            setCustomerDistrict("");
-                            setCustomerCommune("");
-                          }}
-                          className="w-full text-slate-700 font-semibold border border-slate-200 rounded-lg p-2.5 bg-slate-50/50 hover:bg-white text-xs focus:ring-2 focus:ring-blue-500/10 focus:border-blue-400 focus:outline-none transition-all cursor-pointer"
+                    
+                    {/* Phone screen toggle button */}
+                    {!showMobileSelectors && (
+                      <div className="md:hidden">
+                        <button
+                          onClick={() => setShowMobileSelectors(true)}
+                          className="w-full py-3 px-4 bg-emerald-500 hover:bg-emerald-600 border border-emerald-600 text-white font-bold rounded-lg text-xs flex items-center justify-center gap-2 cursor-pointer transition-all shadow-md shadow-emerald-100 active:scale-95"
                         >
-                          <option value="">Select Province</option>
-                          {customerProvinces.map((p, idx) => (
-                            <option key={idx} value={p}>{p}</option>
-                          ))}
-                        </select>
+                          <MapPin className="w-4 h-4 text-white" />
+                          Show Division Selectors
+                        </button>
                       </div>
-
-                      <div className="flex flex-col gap-1">
-                        <label className="text-[10px] font-bold text-slate-400 uppercase">DISTRICT / KHAN</label>
-                        <select
-                          id="lookup_district"
-                          value={customerDistrict}
-                          onChange={(e) => {
-                            setCustomerDistrict(e.target.value);
-                            setCustomerCommune("");
-                          }}
-                          disabled={!customerProvince}
-                          className="w-full text-slate-700 font-semibold border border-slate-200 rounded-lg p-2.5 bg-slate-50/50 hover:bg-white text-xs focus:ring-2 focus:ring-blue-500/10 focus:border-blue-400 focus:outline-none transition-all cursor-pointer disabled:opacity-50 disabled:bg-slate-100 disabled:cursor-not-allowed"
-                        >
-                          <option value="">Select District</option>
-                          {customerDistricts.map((d, idx) => (
-                            <option key={idx} value={d}>{d}</option>
-                          ))}
-                        </select>
-                      </div>
-
-                      <div className="flex flex-col gap-1">
-                        <label className="text-[10px] font-bold text-slate-400 uppercase">COMMUNE / SANGKAT</label>
-                        <select
-                          id="lookup_commune"
-                          value={customerCommune}
-                          onChange={(e) => setCustomerCommune(e.target.value)}
-                          disabled={!customerDistrict}
-                          className="w-full text-slate-700 font-semibold border border-slate-200 rounded-lg p-2.5 bg-slate-50/50 hover:bg-white text-xs focus:ring-2 focus:ring-blue-500/10 focus:border-blue-400 focus:outline-none transition-all cursor-pointer disabled:opacity-50 disabled:bg-slate-100 disabled:cursor-not-allowed"
-                        >
-                          <option value="">Select Commune</option>
-                          {customerCommunes.map((c, idx) => (
-                            <option key={idx} value={c}>{c}</option>
-                          ))}
-                        </select>
-                      </div>
-                    </div>
-
-                    {(customerProvince || customerDistrict || customerCommune) && (
-                      <button
-                        onClick={() => {
-                          setCustomerProvince("");
-                          setCustomerDistrict("");
-                          setCustomerCommune("");
-                          setSingleResult(null);
-                        }}
-                        className="text-[10px] font-bold text-slate-400 hover:text-slate-650 uppercase tracking-widest underline self-start cursor-pointer mt-1"
-                      >
-                        Clear Dropdown Fields
-                      </button>
                     )}
+
+                    {/* Main Content: Hidden on mobile unless showMobileSelectors is active */}
+                    <div className={`${showMobileSelectors ? "flex" : "hidden md:flex"} flex-col gap-4`}>
+                      <div className="border-b border-slate-100 pb-3 flex items-center justify-between gap-3">
+                        <div>
+                          <h3 className="font-bold text-base text-slate-800 flex items-center gap-2">
+                            <MapPin className="w-5 h-5 text-emerald-500 shrink-0" />
+                            Structured Division Selectors
+                          </h3>
+                          <p className="text-slate-500 text-xs mt-1 leading-normal">
+                            Select administrative points cascading from Province to Khan and Sangkat to extract the active national 6-digit postcodes.
+                          </p>
+                        </div>
+                        {showMobileSelectors && (
+                          <button
+                            onClick={() => setShowMobileSelectors(false)}
+                            className="md:hidden text-[10px] font-bold text-slate-400 hover:text-slate-600 uppercase tracking-wider underline cursor-pointer shrink-0"
+                          >
+                            Hide panel
+                          </button>
+                        )}
+                      </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                        <div className="flex flex-col gap-1">
+                          <label className="text-[10px] font-bold text-slate-400 uppercase">PROVINCE / CAPITAL</label>
+                          <select
+                            id="lookup_province"
+                            value={customerProvince}
+                            onChange={(e) => {
+                              setCustomerProvince(e.target.value);
+                              setCustomerDistrict("");
+                              setCustomerCommune("");
+                            }}
+                            className="w-full text-slate-700 font-semibold border border-slate-200 rounded-lg p-2.5 bg-slate-50/50 hover:bg-white text-xs focus:ring-2 focus:ring-blue-500/10 focus:border-blue-400 focus:outline-none transition-all cursor-pointer"
+                          >
+                            <option value="">Select Province</option>
+                            {customerProvinces.map((p, idx) => (
+                              <option key={idx} value={p}>{p}</option>
+                            ))}
+                          </select>
+                        </div>
+
+                        <div className="flex flex-col gap-1">
+                          <label className="text-[10px] font-bold text-slate-400 uppercase">DISTRICT / KHAN</label>
+                          <select
+                            id="lookup_district"
+                            value={customerDistrict}
+                            onChange={(e) => {
+                              setCustomerDistrict(e.target.value);
+                              setCustomerCommune("");
+                            }}
+                            disabled={!customerProvince}
+                            className="w-full text-slate-700 font-semibold border border-slate-200 rounded-lg p-2.5 bg-slate-50/50 hover:bg-white text-xs focus:ring-2 focus:ring-blue-500/10 focus:border-blue-400 focus:outline-none transition-all cursor-pointer disabled:opacity-50 disabled:bg-slate-100 disabled:cursor-not-allowed"
+                          >
+                            <option value="">Select District</option>
+                            {customerDistricts.map((d, idx) => (
+                              <option key={idx} value={d}>{d}</option>
+                            ))}
+                          </select>
+                        </div>
+
+                        <div className="flex flex-col gap-1">
+                          <label className="text-[10px] font-bold text-slate-400 uppercase">COMMUNE / SANGKAT</label>
+                          <select
+                            id="lookup_commune"
+                            value={customerCommune}
+                            onChange={(e) => setCustomerCommune(e.target.value)}
+                            disabled={!customerDistrict}
+                            className="w-full text-slate-700 font-semibold border border-slate-200 rounded-lg p-2.5 bg-slate-50/50 hover:bg-white text-xs focus:ring-2 focus:ring-blue-500/10 focus:border-blue-400 focus:outline-none transition-all cursor-pointer disabled:opacity-50 disabled:bg-slate-100 disabled:cursor-not-allowed"
+                          >
+                            <option value="">Select Commune</option>
+                            {customerCommunes.map((c, idx) => (
+                              <option key={idx} value={c}>{c}</option>
+                            ))}
+                          </select>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-4 mt-1">
+                        {(customerProvince || customerDistrict || customerCommune) && (
+                          <button
+                            onClick={() => {
+                              setCustomerProvince("");
+                              setCustomerDistrict("");
+                              setCustomerCommune("");
+                              setSingleResult(null);
+                            }}
+                            className="text-[10px] font-bold text-slate-400 hover:text-slate-650 uppercase tracking-widest underline self-start cursor-pointer"
+                          >
+                            Clear Dropdown Fields
+                          </button>
+                        )}
+                        {showMobileSelectors && (
+                          <button
+                            onClick={() => setShowMobileSelectors(false)}
+                            className="md:hidden ml-auto text-[10px] font-bold text-slate-400 hover:text-slate-650 uppercase tracking-widest underline cursor-pointer"
+                          >
+                            Close Panel
+                          </button>
+                        )}
+                      </div>
+                    </div>
                   </div>
                 )}
                 
