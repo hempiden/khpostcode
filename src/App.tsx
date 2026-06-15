@@ -976,7 +976,11 @@ export default function App() {
       const res = await fetch("/api/search-history");
       if (res.ok) {
         const data = await res.json();
-        setSearchHistory(data.history || []);
+        const rawHistory = data.history || [];
+        const sortedHistory = [...rawHistory].sort(
+          (a, b) => new Date(b.created_at || b.datetime || b.created_at).getTime() - new Date(a.created_at || a.datetime || a.created_at).getTime()
+        );
+        setSearchHistory(sortedHistory);
         setBenchmarkCurrent(data.benchmark_current !== undefined ? data.benchmark_current : 50);
       } else {
         throw new Error("Backend API returned non-OK status");

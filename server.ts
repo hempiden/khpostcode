@@ -2966,6 +2966,9 @@ app.get("/api/search-history", async (req, res) => {
     };
   });
 
+  // Sort descending: newest (latest) search first, oldest (last) search at the bottom
+  mapped.sort((a, b) => new Date(b.created_at || b.datetime).getTime() - new Date(a.created_at || a.datetime).getTime());
+
   res.json({
     history: mapped,
     benchmark_current: getDynamicCutoffThreshold()
