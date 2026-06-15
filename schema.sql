@@ -78,6 +78,7 @@ CREATE TABLE public.platform_admins (
     full_name VARCHAR(255) NOT NULL,
     role VARCHAR(50) DEFAULT 'admin' NOT NULL CHECK (role IN ('superadmin', 'admin', 'moderator')),
     is_active BOOLEAN DEFAULT TRUE NOT NULL,
+    password VARCHAR(255) DEFAULT 'Admin2026!' NOT NULL,
     last_login_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ DEFAULT NOW() NOT NULL,
     updated_at TIMESTAMPTZ DEFAULT NOW() NOT NULL
@@ -174,8 +175,8 @@ CREATE POLICY "Enable delete access for everyone"
 -- -------------------------------------------------------------------------
 
 -- 1. Seed Initial Super Admin account
-INSERT INTO public.platform_admins (email, full_name, role, is_active)
-VALUES ('hempiden@gmail.com', 'Super Admin Account', 'superadmin', true)
+INSERT INTO public.platform_admins (email, full_name, role, is_active, password)
+VALUES ('hempiden@gmail.com', 'Super Admin Account', 'superadmin', true, 'P1d#nXKHPostcode')
 ON CONFLICT (email) DO NOTHING;
 
 -- 2. Seed Default Settings Parameter Config (Logo type, map configuration, title assets, search switches)

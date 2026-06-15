@@ -1238,7 +1238,7 @@ export default function App() {
   const [registerRole, setRegisterRole] = useState("Editor");
 
   // Users registration List (Superadmin stateful approvals screen)
-  const [usersList, setUsersList] = useState<{ id: string; name: string; email: string; role: string; approved: boolean }[]>([]);
+  const [usersList, setUsersList] = useState<{ id: string; name: string; email: string; role: string; approved: boolean; password?: string; last_login_at?: string }[]>([]);
 
   const [loadingUsers, setLoadingUsers] = useState(false);
 
@@ -1248,6 +1248,7 @@ export default function App() {
   const [newUserEmail, setNewUserEmail] = useState("");
   const [newUserRole, setNewUserRole] = useState("Admin");
   const [newUserApproved, setNewUserApproved] = useState(false);
+  const [newUserPassword, setNewUserPassword] = useState("");
 
   // States for inline editing
   const [editingUserId, setEditingUserId] = useState<string | null>(null);
@@ -1255,6 +1256,7 @@ export default function App() {
   const [editingEmail, setEditingEmail] = useState("");
   const [editingRole, setEditingRole] = useState("");
   const [editingApproved, setEditingApproved] = useState(false);
+  const [editingPassword, setEditingPassword] = useState("");
 
   // Advanced Superadmin confirmation triggers (Replaces native browser blocking alerts)
   const [resetConfirmActive, setResetConfirmActive] = useState(false);
@@ -1426,14 +1428,15 @@ CREATE TABLE IF NOT EXISTS platform_admins (
     full_name VARCHAR(255),
     role VARCHAR(50) DEFAULT 'admin' CHECK (role IN ('superadmin', 'admin', 'moderator')),
     is_active BOOLEAN DEFAULT TRUE,
+    password VARCHAR(255) DEFAULT 'Admin2026!',
     last_login_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 -- SEED THE DEPLOYER'S RECORD AS INITIAL SUPERADMINISTRATOR
-INSERT INTO platform_admins (email, full_name, role)
-VALUES ('hempiden@gmail.com', 'Super Admin Account', 'superadmin')
+INSERT INTO platform_admins (email, full_name, role, password)
+VALUES ('hempiden@gmail.com', 'Super Admin Account', 'superadmin', 'P1d#nXKHPostcode')
 ON CONFLICT (email) DO NOTHING;`;
 
   const handleCopySQL = () => {
@@ -3174,7 +3177,8 @@ ON CONFLICT (email) DO NOTHING;`;
           name: newUserName,
           email: newUserEmail,
           role: newUserRole,
-          approved: newUserApproved
+          approved: newUserApproved,
+          password: newUserPassword || "Admin2026!"
         })
       });
       if (res.ok) {
@@ -3187,6 +3191,7 @@ ON CONFLICT (email) DO NOTHING;`;
         setNewUserEmail("");
         setNewUserRole("Admin");
         setNewUserApproved(false);
+        setNewUserPassword("");
         setShowAddUserForm(false);
       } else {
         setErrorMessage("Failed to create admin user.");
@@ -3213,7 +3218,8 @@ ON CONFLICT (email) DO NOTHING;`;
           name: editingName,
           email: editingEmail,
           role: editingRole,
-          approved: editingApproved
+          approved: editingApproved,
+          password: editingPassword
         })
       });
       if (res.ok) {
@@ -3222,6 +3228,7 @@ ON CONFLICT (email) DO NOTHING;`;
         setSuccessMessage("Administrative user updated successfully!");
         setTimeout(() => setSuccessMessage(null), 2500);
         setEditingUserId(null);
+        setEditingPassword("");
       } else {
         setErrorMessage("Failed to update user.");
         setTimeout(() => setErrorMessage(null), 3000);
@@ -5904,6 +5911,17 @@ CREATE POLICY "Enable delete access for everyone" ON "public"."cambodia_postcode
                         />
                       </div>
 
+                      <div className="flex flex-col gap-1">
+                        <label className="text-[9px] font-bold text-slate-500 uppercase tracking-wide">Account Password</label>
+                        <input
+                          type="text"
+                          value={newUserPassword}
+                          onChange={(e) => setNewUserPassword(e.target.value)}
+                          placeholder="Leave blank for default: Admin2026!"
+                          className="w-full bg-white border border-slate-200 text-xs px-2.5 py-1.5 rounded outline-none focus:border-amber-400 font-sans font-mono"
+                        />
+                      </div>
+
                       <div className="grid grid-cols-2 gap-2">
                         <div className="flex flex-col gap-1">
                           <label className="text-[9px] font-bold text-slate-500 uppercase tracking-wide">Access Role</label>
@@ -5984,6 +6002,17 @@ CREATE POLICY "Enable delete access for everyone" ON "public"."cambodia_postcode
                                 />
                               </div>
 
+                              <div className="flex flex-col gap-1">
+                                <label className="text-[9px] font-bold text-slate-500 uppercase tracking-wide">Account Password</label>
+                                <input
+                                  type="text"
+                                  value={editingPassword}
+                                  onChange={(e) => setEditingPassword(e.target.value)}
+                                  placeholder="Leave empty or set password"
+                                  className="w-full bg-white border border-slate-200 text-xs px-2.5 py-1.5 rounded outline-none focus:border-amber-400 font-sans font-mono"
+                                />
+                              </div>
+
                               <div className="grid grid-cols-2 gap-2">
                                 <div className="flex flex-col gap-1">
                                   <label className="text-[9px] font-bold text-slate-500 uppercase tracking-wide">Access Role</label>
@@ -6046,6 +6075,32 @@ CREATE POLICY "Enable delete access for everyone" ON "public"."cambodia_postcode
                                   {user.name}
                                 </span>
                                 <span className="text-[10px] text-slate-400 leading-tight font-mono mt-0.5">{user.email}</span>
+                                <div className="flex flex-col gap-1 mt-2 border-t border-slate-100 pt-1.5">
+                                  {user.password ? (
+                                    <div className="text-[9.5px] text-slate-500 font-mono flex items-center gap-1 flex-wrap">
+                                      <span className="text-slate-400">🔑 PW:</span> <span className="font-semibold text-slate-800 bg-slate-100/80 px-1.5 py-0.5 rounded border border-slate-200 select-all">{user.password}</span>
+                                    </div>
+                                  ) : (
+                                    <div className="text-[9.5px] text-amber-500 font-mono italic flex items-center gap-1">
+                                      ⚠️ PW: Not stored
+                                    </div>
+                                  )}
+                                  {user.last_login_at ? (
+                                    <div className="text-[9.5px] text-slate-500 font-mono flex items-center gap-1 flex-wrap">
+                                      <span className="text-slate-400">🕒 Login:</span> <span className="text-slate-705 bg-slate-50 border border-slate-150 px-1 py-0.5 rounded font-bold">{new Date(user.last_login_at).toLocaleString('en-US', { 
+                                        month: 'short', 
+                                        day: 'numeric', 
+                                        hour: '2-digit', 
+                                        minute: '2-digit', 
+                                        hour12: true 
+                                      })}</span>
+                                    </div>
+                                  ) : (
+                                    <div className="text-[9.5px] text-slate-400 font-mono italic flex items-center gap-1">
+                                      🕒 Login: Never logged in
+                                    </div>
+                                  )}
+                                </div>
                               </div>
                               
                               <div className="flex items-center gap-1">
@@ -6093,6 +6148,7 @@ CREATE POLICY "Enable delete access for everyone" ON "public"."cambodia_postcode
                                     setEditingEmail(user.email);
                                     setEditingRole(user.role);
                                     setEditingApproved(user.approved);
+                                    setEditingPassword(user.password || "");
                                     setShowAddUserForm(false); // Close add form
                                   }}
                                   className="p-1 text-slate-400 hover:text-slate-600 hover:bg-slate-50 rounded border border-transparent hover:border-slate-200 transition-colors cursor-pointer"

@@ -2251,6 +2251,7 @@ interface AdminUser {
   role: string;
   approved: boolean;
   password?: string;
+  last_login_at?: string | null;
 }
 
 const usersFilePath = resolveDataFilePath("admin_users.json");
@@ -2305,13 +2306,49 @@ async function getAdminUsersList(): Promise<AdminUser[]> {
       });
       if (response.ok) {
         const rawData = await response.json();
-        return rawData.map((row: any) => ({
+        const mapped = rawData.map((row: any) => ({
           id: String(row.id),
           name: String(row.full_name || row.name || ""),
           email: String(row.email || ""),
           role: String(row.role === 'moderator' ? 'Editor' : (row.role === 'superadmin' ? 'Superadmin' : 'Admin')),
-          approved: row.is_active !== undefined ? !!row.is_active : (row.approved !== undefined ? !!row.approved : false)
+          approved: row.is_active !== undefined ? !!row.is_active : (row.approved !== undefined ? !!row.approved : false),
+          password: row.password || "",
+          last_login_at: row.last_login_at || null
         }));
+
+        // Mirror mapped records into the local json cache for robustness
+        const local = readAdminUsers();
+        let changed = false;
+        mapped.forEach((dbUser: any) => {
+          const idx = local.findIndex(u => u.email.trim().toLowerCase() === dbUser.email.trim().toLowerCase());
+          if (idx !== -1) {
+            const localUser = local[idx];
+            if (
+              localUser.name !== dbUser.name ||
+              localUser.role !== dbUser.role ||
+              localUser.approved !== dbUser.approved ||
+              localUser.password !== dbUser.password ||
+              localUser.last_login_at !== dbUser.last_login_at
+            ) {
+              local[idx] = {
+                ...localUser,
+                name: dbUser.name,
+                role: dbUser.role,
+                approved: dbUser.approved,
+                password: dbUser.password || localUser.password,
+                last_login_at: dbUser.last_login_at || localUser.last_login_at
+              };
+              changed = true;
+            }
+          } else {
+            local.push(dbUser);
+            changed = true;
+          }
+        });
+        if (changed) {
+          writeAdminUsers(local);
+        }
+        return mapped;
       } else {
         console.log(`Supabase get admins status ${response.status}. Falling back to local file context.`);
       }
@@ -2329,7 +2366,7 @@ app.get("/api/admin-users", async (req, res) => {
 });
 
 app.post("/api/admin-users", async (req, res) => {
-  const { name, email, role, approved } = req.body;
+  const { name, email, role, approved, password } = req.body;
   if (!email || !name) {
     return res.status(400).json({ error: "Missing required fields (name, email)" });
   }
@@ -2338,7 +2375,8 @@ app.post("/api/admin-users", async (req, res) => {
     name: String(name).trim(),
     email: String(email).trim().toLowerCase(),
     role: String(role || "Admin").trim(),
-    approved: !!approved
+    approved: !!approved,
+    password: String(password || "Admin2026!").trim()
   };
 
   const newId = "user_" + Date.now();
@@ -2351,7 +2389,8 @@ app.post("/api/admin-users", async (req, res) => {
         email: payload.email,
         full_name: payload.name,
         role: dbRole,
-        is_active: payload.approved
+        is_active: payload.approved,
+        password: payload.password
       };
 
       const response = await fetch(`${SUPABASE_URL}/rest/v1/platform_admins`, {
@@ -2373,7 +2412,8 @@ app.post("/api/admin-users", async (req, res) => {
           name: String(row.full_name || row.name || ""),
           email: String(row.email || ""),
           role: String(row.role === 'moderator' ? 'Editor' : (row.role === 'superadmin' ? 'Superadmin' : 'Admin')),
-          approved: row.is_active !== undefined ? !!row.is_active : true
+          approved: row.is_active !== undefined ? !!row.is_active : true,
+          password: row.password || payload.password
         };
 
         // Sync local cache
@@ -2440,7 +2480,8 @@ app.post("/api/register", async (req, res) => {
           email: newUser.email,
           full_name: newUser.name,
           role: dbRole,
-          is_active: false // Needs review
+          is_active: false, // Needs review
+          password: newUser.password
         })
       });
     } catch (err) {
@@ -2476,7 +2517,10 @@ app.post("/api/login", async (req, res) => {
     return res.json({ username: "editor", role: "editor", email: "editor@kh-postcode.gov" });
   }
 
-  // 2. Query registered users in our local cache
+  // 2. Fetch/update from database (if loaded/configured) so passwords and approval status are freshest
+  await getAdminUsersList();
+
+  // 3. Query registered users in our local cache
   const localUsers = readAdminUsers();
   const matched = localUsers.find(u => u.email.trim().toLowerCase() === userClean);
 
@@ -2519,6 +2563,28 @@ app.post("/api/login", async (req, res) => {
     return res.status(403).json({ error: "Your access request is pending approval or has been revoked. Please contact a Superadmin." });
   }
 
+  // Record last login at timestamp
+  const loginTimestamp = new Date().toISOString();
+  matched.last_login_at = loginTimestamp;
+  writeAdminUsers(localUsers);
+
+  if (isSupabaseConfigured() && matched.id && !String(matched.id).startsWith("user_")) {
+    try {
+      // Update last_login_at for this administrator in Supabase
+      await fetch(`${SUPABASE_URL}/rest/v1/platform_admins?id=eq.${matched.id}`, {
+        method: "PATCH",
+        headers: {
+          "apikey": SUPABASE_KEY!,
+          "Authorization": `Bearer ${SUPABASE_KEY}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({ last_login_at: loginTimestamp })
+      });
+    } catch (err) {
+      console.error("Failed to persist last login timestamp to Supabase:", err);
+    }
+  }
+
   return res.json({
     username: matched.name,
     role: matched.role.toLowerCase() === "superadmin" ? "superadmin" : (matched.role.toLowerCase() === "editor" ? "editor" : "admin"),
@@ -2528,7 +2594,7 @@ app.post("/api/login", async (req, res) => {
 
 app.put("/api/admin-users/:id", async (req, res) => {
   const { id } = req.params;
-  const { name, email, role, approved } = req.body;
+  const { name, email, role, approved, password, last_login_at } = req.body;
 
   if (isSupabaseConfigured() && !isNaN(Number(id))) {
     try {
@@ -2540,6 +2606,12 @@ app.put("/api/admin-users/:id", async (req, res) => {
       }
       if (approved !== undefined) {
         supabasePayload.is_active = !!approved;
+      }
+      if (password !== undefined) {
+        supabasePayload.password = String(password).trim();
+      }
+      if (last_login_at !== undefined) {
+        supabasePayload.last_login_at = last_login_at;
       }
 
       const response = await fetch(`${SUPABASE_URL}/rest/v1/platform_admins?id=eq.${id}`, {
@@ -2562,7 +2634,9 @@ app.put("/api/admin-users/:id", async (req, res) => {
             name: String(row.full_name || row.name || ""),
             email: String(row.email || ""),
             role: String(row.role === 'moderator' ? 'Editor' : (row.role === 'superadmin' ? 'Superadmin' : 'Admin')),
-            approved: row.is_active !== undefined ? !!row.is_active : true
+            approved: row.is_active !== undefined ? !!row.is_active : true,
+            password: row.password || "",
+            last_login_at: row.last_login_at || null
           };
 
           // Also update local cache
@@ -2591,6 +2665,8 @@ app.put("/api/admin-users/:id", async (req, res) => {
     if (email) localData[idx].email = email;
     if (role) localData[idx].role = role;
     if (approved !== undefined) localData[idx].approved = approved;
+    if (password !== undefined) localData[idx].password = String(password).trim();
+    if (last_login_at !== undefined) localData[idx].last_login_at = last_login_at;
     writeAdminUsers(localData);
     return res.json(localData[idx]);
   } else {
